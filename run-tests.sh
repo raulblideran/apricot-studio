@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Clipper's test suite.
+# Apricot Studio's test suite.
 #
 #   ./run-tests.sh           everything, including real ffmpeg exports
 #   ./run-tests.sh --fast    unit and command tests only, no encoding

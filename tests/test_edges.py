@@ -28,7 +28,7 @@ class ContainerExtension(unittest.TestCase):
 
     @classmethod
     def setUpClass(cls):
-        cls.tmp = tempfile.mkdtemp(prefix="clipper-ext-")
+        cls.tmp = tempfile.mkdtemp(prefix="apricot-ext-")
         cls.src = fixtures.sample("allp")
 
     @classmethod
@@ -153,7 +153,7 @@ class AwkwardFilenames(unittest.TestCase):
 
     @classmethod
     def setUpClass(cls):
-        cls.tmp = tempfile.mkdtemp(prefix="clipper-names-")
+        cls.tmp = tempfile.mkdtemp(prefix="apricot-names-")
 
     @classmethod
     def tearDownClass(cls):
@@ -182,7 +182,7 @@ class UnreadableSources(unittest.TestCase):
 
     @classmethod
     def setUpClass(cls):
-        cls.tmp = tempfile.mkdtemp(prefix="clipper-bad-")
+        cls.tmp = tempfile.mkdtemp(prefix="apricot-bad-")
 
     @classmethod
     def tearDownClass(cls):
@@ -237,7 +237,7 @@ class PathologicalMedia(unittest.TestCase):
 
     @classmethod
     def setUpClass(cls):
-        cls.tmp = tempfile.mkdtemp(prefix="clipper-odd-")
+        cls.tmp = tempfile.mkdtemp(prefix="apricot-odd-")
 
     @classmethod
     def tearDownClass(cls):
@@ -323,7 +323,7 @@ class KeyframeRobustness(unittest.TestCase):
 class OutputDestinations(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        cls.tmp = tempfile.mkdtemp(prefix="clipper-dest-")
+        cls.tmp = tempfile.mkdtemp(prefix="apricot-dest-")
 
     @classmethod
     def tearDownClass(cls):

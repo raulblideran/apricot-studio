@@ -30,7 +30,7 @@ REAL_WINDOWS = (_app.platformName() != "offscreen"
 def dispose(window) -> None:
     """Release a window deterministically.
 
-    Two Clipper instances surviving to interpreter shutdown segfault: their
+    Two ApricotStudio instances surviving to interpreter shutdown segfault: their
     media stacks get torn down after Qt has partly gone, in arbitrary order.
     Dropping each one while the event loop is still healthy avoids that.
     """
@@ -281,9 +281,9 @@ class MainWindow(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         from PyQt6.QtTest import QTest
-        from clipper import Clipper
+        from apricot import ApricotStudio
         from tests import fixtures
-        cls.window = Clipper()
+        cls.window = ApricotStudio()
         cls.window.show()
         cls.window.activateWindow()
         cls.window.raise_()
@@ -342,15 +342,15 @@ class DeleteTargetsTheRightFile(unittest.TestCase):
     def setUp(self):
         import shutil
         import tempfile
-        from clipper import Clipper
+        from apricot import ApricotStudio
         from tests import fixtures
-        self.tmp = tempfile.mkdtemp(prefix="clipper-race-")
+        self.tmp = tempfile.mkdtemp(prefix="apricot-race-")
         self.cut = os.path.join(self.tmp, "cut_this.mp4")
         self.other = os.path.join(self.tmp, "do_not_touch.mp4")
         shutil.copy(fixtures.sample("allp"), self.cut)
         shutil.copy(fixtures.sample("allp"), self.other)
         self.clip = os.path.join(self.tmp, "made.mp4")
-        self.window = Clipper()
+        self.window = ApricotStudio()
         self.window.show()
         self.window.load(self.cut)
 
@@ -380,10 +380,10 @@ class DeleteTargetsTheRightFile(unittest.TestCase):
 
     def candidate(self, **over):
         """What the delete prompt would actually target for a given record."""
-        from clipper import Clipper, Exported
+        from apricot import ApricotStudio, Exported
         fields = dict(source=self.cut, output=self.clip, duration=6.0, kept=2.0)
         fields.update(over)
-        return Clipper._delete_candidate(Exported(**fields))
+        return ApricotStudio._delete_candidate(Exported(**fields))
 
     def write_clip(self, size=8192):
         self.clip = os.path.join(self.tmp, "made.mp4")
@@ -418,8 +418,8 @@ class DeleteTargetsTheRightFile(unittest.TestCase):
         self.assertIsNone(self.candidate(output=self.cut))
 
     def test_it_declines_without_a_record(self):
-        from clipper import Clipper
-        self.assertIsNone(Clipper._delete_candidate(None))
+        from apricot import ApricotStudio
+        self.assertIsNone(ApricotStudio._delete_candidate(None))
 
     def test_the_record_is_consumed_so_it_cannot_fire_twice(self):
         self.window._timeline.set_in(0.5)
@@ -444,12 +444,12 @@ class OutputNaming(unittest.TestCase):
     def setUpClass(cls):
         import shutil
         import tempfile
-        from clipper import Clipper
+        from apricot import ApricotStudio
         from tests import fixtures
-        cls.tmp = tempfile.mkdtemp(prefix="clipper-name-")
+        cls.tmp = tempfile.mkdtemp(prefix="apricot-name-")
         cls.source = os.path.join(cls.tmp, "replay.mp4")
         shutil.copy(fixtures.sample("allp"), cls.source)
-        cls.window = Clipper()
+        cls.window = ApricotStudio()
         cls.window.show()
         cls.window.load(cls.source)
 
@@ -507,7 +507,7 @@ class OutputNaming(unittest.TestCase):
 
     def finish_a_pretend_export(self, name="trickshot"):
         """Drive the post-export path without waiting on a real encode."""
-        from clipper import Exported
+        from apricot import Exported
         self.window._out_name.setText(name)
         output = self.window._output_path()
         open(output, "w").close()
@@ -548,12 +548,12 @@ class CloseFile(unittest.TestCase):
     def setUp(self):
         import shutil
         import tempfile
-        from clipper import Clipper
+        from apricot import ApricotStudio
         from tests import fixtures
-        self.tmp = tempfile.mkdtemp(prefix="clipper-close-")
+        self.tmp = tempfile.mkdtemp(prefix="apricot-close-")
         self.source = os.path.join(self.tmp, "clip.mp4")
         shutil.copy(fixtures.sample("allp"), self.source)
-        self.window = Clipper()
+        self.window = ApricotStudio()
         self.window.show()
         self.window.load(self.source)
 
@@ -607,8 +607,8 @@ class EmptyWindow(unittest.TestCase):
 
     @classmethod
     def setUpClass(cls):
-        from clipper import Clipper
-        cls.window = Clipper()
+        from apricot import ApricotStudio
+        cls.window = ApricotStudio()
 
     @classmethod
     def tearDownClass(cls):

@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
-"""Clipper -- open a video, mark in and out, export the clip.
+"""Apricot Studio -- open a video, mark in and out, export the clip.
 
 The export inherits every setting from the source file, so there is nothing to
 configure. Run with an optional file path:
 
-    python3 clipper.py ~/Videos/Replay_2026-02-23_22-28-36.mp4
+    python3 apricot.py ~/Videos/Replay_2026-02-23_22-28-36.mp4
 """
 
 from __future__ import annotations
@@ -132,10 +132,10 @@ class Exported:
     kept: float
 
 
-class Clipper(QMainWindow):
+class ApricotStudio(QMainWindow):
     def __init__(self, path: str | None = None):
         super().__init__()
-        self.setWindowTitle("Clipper")
+        self.setWindowTitle("Apricot Studio")
         self.resize(1180, 900)
 
         self._info: MediaInfo | None = None
@@ -146,7 +146,8 @@ class Clipper(QMainWindow):
         self._was_playing = False
         self._last_output: str | None = None
         self._exported: Exported | None = None
-        self._settings = QSettings("Clipper", "Clipper")
+        self._settings = QSettings("ApricotStudio", "ApricotStudio")
+        self._migrate_settings()
 
         self.setAcceptDrops(True)
 
@@ -411,6 +412,20 @@ class Clipper(QMainWindow):
 
     # ----- recent files -------------------------------------------------
 
+    def _migrate_settings(self) -> None:
+        """Carry settings over from the name this app used to have.
+
+        A rename moves the QSettings path, which would quietly lose the recent
+        file list. Runs once: after the first save under the new name there is
+        nothing left to bring across.
+        """
+        if self._settings.contains("recent"):
+            return
+        old = QSettings("Clipper", "Clipper")
+        previous = old.value("recent", [], type=list)
+        if previous:
+            self._settings.setValue("recent", previous)
+
     def _recent(self) -> list[str]:
         stored = self._settings.value("recent", [], type=list) or []
         return [p for p in stored if isinstance(p, str) and os.path.exists(p)]
@@ -487,7 +502,7 @@ class Clipper(QMainWindow):
 
         self._info = info
         self._keyframes = []
-        self.setWindowTitle(f"{os.path.basename(path)} — Clipper")
+        self.setWindowTitle(f"{os.path.basename(path)} — Apricot Studio")
         self._title.setText(os.path.basename(path))
         self._meta.setText(info.summary())
 
@@ -972,7 +987,7 @@ class Clipper(QMainWindow):
         self._badge.setText("")
         self._title.setText("No file loaded")
         self._meta.setText("Open a video to begin")
-        self.setWindowTitle("Clipper")
+        self.setWindowTitle("Apricot Studio")
         self._out_dir.clear()
         self._out_name.clear()
         self._out_ext.setText(".mp4")
@@ -1087,22 +1102,23 @@ class Clipper(QMainWindow):
 
 def main() -> int:
     app = QApplication(sys.argv)
-    app.setApplicationName("Clipper")
-    app.setApplicationDisplayName("Clipper")
+    app.setApplicationName("Apricot Studio")
+    app.setApplicationDisplayName("Apricot Studio")
     # Lets Wayland match the window to the installed .desktop entry, so the task
     # manager shows the right name and icon.
-    app.setDesktopFileName("clipper")
+    app.setDesktopFileName("io.github.raulblideran.ApricotStudio")
 
-    icon = os.path.join(os.path.dirname(os.path.abspath(__file__)), "clipper.svg")
+    icon = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                        "io.github.raulblideran.ApricotStudio.svg")
     app.setWindowIcon(QIcon(icon) if os.path.exists(icon)
                       else QIcon.fromTheme("multimedia-video-player"))
 
     path = next((a for a in sys.argv[1:] if not a.startswith("-")), None)
     if path and not os.path.exists(os.path.expanduser(path)):
-        print(f"clipper: no such file: {path}", file=sys.stderr)
+        print(f"apricot-studio: no such file: {path}", file=sys.stderr)
         return 1
 
-    window = Clipper(path)
+    window = ApricotStudio(path)
     window.show()
     return app.exec()
 

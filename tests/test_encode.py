@@ -32,7 +32,7 @@ class EncodeCase(unittest.TestCase):
     def setUpClass(cls):
         if not shutil.which("ffmpeg"):
             raise unittest.SkipTest("ffmpeg is required for encode tests")
-        cls.tmp = tempfile.mkdtemp(prefix="clipper-encode-")
+        cls.tmp = tempfile.mkdtemp(prefix="apricot-encode-")
 
     @classmethod
     def tearDownClass(cls):

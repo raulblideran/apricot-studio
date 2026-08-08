@@ -1,4 +1,4 @@
-"""Everything Clipper learns about a source file.
+"""Everything Apricot Studio learns about a source file.
 
 A single synchronous ffprobe call fills in MediaInfo (cheap: header read only).
 The three expensive extras -- keyframe positions, the audio waveform and the

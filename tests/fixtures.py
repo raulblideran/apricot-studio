@@ -20,7 +20,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 FFMPEG = shutil.which("ffmpeg") or "ffmpeg"
 FFPROBE = shutil.which("ffprobe") or "ffprobe"
 
-CACHE = os.path.join(tempfile.gettempdir(), f"clipper-tests-{os.getuid()}")
+CACHE = os.path.join(tempfile.gettempdir(), f"apricot-tests-{os.getuid()}")
 DURATION = 6
 FPS = 60
 GOP = FPS * 2          # a keyframe every 2s, as the real recordings have

@@ -1,4 +1,4 @@
-"""Clipper's test suite.
+"""Apricot Studio's test suite.
 
 Uses only the standard library's unittest plus PyQt6.QtTest, both of which are
 already present, so the project keeps its zero-dependency property and the suite

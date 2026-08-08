@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Install Clipper for the current user only.
+# Install Apricot Studio for the current user only.
 #
 # Everything lands under ~/.local, so nothing touches the rpm-ostree base image
 # and the install survives Bazzite updates. Run with --uninstall to remove it.
@@ -10,14 +10,14 @@ BIN="$HOME/.local/bin"
 APPS="$HOME/.local/share/applications"
 ICONS="$HOME/.local/share/icons/hicolor/scalable/apps"
 
-LAUNCHER="$BIN/clipper"
-ENTRY="$APPS/clipper.desktop"
-ICON="$ICONS/clipper.svg"
+LAUNCHER="$BIN/apricot-studio"
+ENTRY="$APPS/io.github.raulblideran.ApricotStudio.desktop"
+ICON="$ICONS/io.github.raulblideran.ApricotStudio.svg"
 
 if [[ "${1:-}" == "--uninstall" ]]; then
     rm -f "$LAUNCHER" "$ENTRY" "$ICON"
     update-desktop-database "$APPS" 2>/dev/null || true
-    echo "Removed Clipper."
+    echo "Removed Apricot Studio."
     exit 0
 fi
 
@@ -31,23 +31,23 @@ mkdir -p "$BIN" "$APPS" "$ICONS"
 
 cat > "$LAUNCHER" <<EOF
 #!/bin/sh
-exec python3 "$SRC/clipper.py" "\$@"
+exec python3 "$SRC/apricot.py" "\$@"
 EOF
 chmod +x "$LAUNCHER"
 
-sed "s|@EXEC@|$LAUNCHER|g" "$SRC/clipper.desktop" > "$ENTRY"
+sed "s|@EXEC@|$LAUNCHER|g" "$SRC/io.github.raulblideran.ApricotStudio.desktop" > "$ENTRY"
 chmod +x "$ENTRY"
-cp "$SRC/clipper.svg" "$ICON"
+cp "$SRC/io.github.raulblideran.ApricotStudio.svg" "$ICON"
 
 update-desktop-database "$APPS" 2>/dev/null || true
 gtk-update-icon-cache -f -t "$HOME/.local/share/icons/hicolor" 2>/dev/null || true
 
-echo "Installed Clipper."
+echo "Installed Apricot Studio."
 echo "  launcher : $LAUNCHER"
 echo "  menu     : $ENTRY"
 echo
 echo "Launch it from the app menu, or right-click a video in Dolphin -> Open With."
 case ":$PATH:" in
-    *":$BIN:"*) echo "You can also just run: clipper /path/to/video.mp4" ;;
+    *":$BIN:"*) echo "You can also just run: apricot-studio /path/to/video.mp4" ;;
     *) echo "Note: $BIN is not on your PATH, so run it as: $LAUNCHER video.mp4" ;;
 esac

@@ -1,4 +1,4 @@
-# Clipper
+# Apricot Studio
 
 A small video trimmer for Bazzite. Open a file, mark in and out, export the clip.
 The export inherits every setting from the source, so there is nothing to configure.
@@ -6,7 +6,7 @@ The export inherits every setting from the source, so there is nothing to config
 Built for pulling a highlight out of a gpu-screen-recorder replay buffer without
 opening kdenlive or DaVinci.
 
-![the window](clipper.svg)
+![the window](io.github.raulblideran.ApricotStudio.svg)
 
 ## Install
 
@@ -15,7 +15,7 @@ opening kdenlive or DaVinci.
 ```
 
 Everything lands under `~/.local`, so nothing touches the rpm-ostree base image
-and it survives Bazzite updates. Afterwards Clipper is in the app menu and in
+and it survives Bazzite updates. Afterwards Apricot Studio is in the app menu and in
 Dolphin's right-click → *Open With*. Remove it with `./install.sh --uninstall`.
 
 There is nothing to download: it uses the system `ffmpeg` and the system PyQt6,
@@ -24,8 +24,8 @@ both of which Bazzite already ships. No pip, no venv, no layered packages.
 ## Use
 
 ```sh
-clipper                     # then Open…
-clipper ~/Videos/clip.mp4   # or straight to a file
+apricot-studio                     # then Open…
+apricot-studio ~/Videos/clip.mp4   # or straight to a file
 ```
 
 You can also drop a video onto the window, or pick one from **Recent**.
@@ -137,7 +137,7 @@ its empty state — it will not sit there showing a file that no longer exists.
 That GOP-structure row matters more than it looks. Screen recorders encode
 all-P (`IPPPP…`, no B-frames) for low latency, but an encoder left to itself
 adds them — which forces the decoder to buffer and reorder frames, and shows up
-as stuttery playback. Clipper reads the source's reorder depth and matches it.
+as stuttery playback. Apricot Studio reads the source's reorder depth and matches it.
 
 Cuts are frame-exact at both ends. Because that requires re-encoding the video,
 each export costs one generation; measured against a 1440p60 9.5 Mb/s replay the
@@ -156,7 +156,7 @@ since AV1 in software is far too slow at 4K.
 
 | | |
 |---|---|
-| `clipper.py` | window, player, keyboard |
+| `apricot.py` | window, player, keyboard |
 | `media.py` | ffprobe, keyframes, waveform, filmstrip |
 | `export.py` | builds and runs the ffmpeg cut |
 | `timeline.py` | the timeline widget |
