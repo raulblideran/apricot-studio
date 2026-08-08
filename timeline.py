@@ -11,6 +11,7 @@ from PyQt6.QtCore import QPointF, QRect, QRectF, Qt, pyqtSignal
 from PyQt6.QtGui import QColor, QImage, QPainter, QPainterPath, QPen, QPixmap
 from PyQt6.QtWidgets import QWidget
 
+import theme
 from media import THUMB_H, THUMB_W, fmt_tc
 
 FILM_H = 58
@@ -30,7 +31,7 @@ RULER_BG = QColor(22, 24, 28)
 RULER_FG = QColor(150, 156, 168)
 KEYFRAME = QColor(88, 96, 112)
 KEYFRAME_HOT = QColor(120, 220, 150)
-ACCENT = QColor(255, 176, 46)
+ACCENT = QColor(theme.DEFAULT_ACCENT)          # replaced per instance
 DIM = QColor(10, 11, 13, 168)
 PLAYHEAD = QColor(255, 255, 255)
 POPUP_BG = QColor(16, 18, 21, 245)
@@ -71,12 +72,22 @@ class Timeline(QWidget):
         self._keyframes: list[float] = []
         self._cache: QPixmap | None = None
         self._drag: str | None = None
+        # Follows the user's accent; the grip colour is derived so the
+        # handle stays legible whatever colour is chosen.
+        self._accent = QColor(theme.DEFAULT_ACCENT)
+        self._grip = QColor(theme.on_accent(theme.DEFAULT_ACCENT))
         self._snapped = False
 
         # Visible range. Starts as the whole file.
         self._view_start = 0.0
         self._view_end = 0.0
         self._hover_x: float | None = None
+
+    def set_accent(self, colour: str) -> None:
+        colour = theme.normalise(colour)
+        self._accent = QColor(colour)
+        self._grip = QColor(theme.on_accent(colour))
+        self.update()
 
     # ----- data ---------------------------------------------------------
 
@@ -346,11 +357,11 @@ class Timeline(QWidget):
             p.fillRect(QRectF(x_out, 0, self.width() - x_out, h), DIM)
 
         p.setRenderHint(QPainter.RenderHint.Antialiasing, True)
-        p.setPen(QPen(ACCENT, 1))
+        p.setPen(QPen(self._accent, 1))
         p.drawLine(QPointF(x_in, 0), QPointF(x_in, h))
         p.drawLine(QPointF(x_out, 0), QPointF(x_out, h))
-        p.fillRect(QRectF(x_in, 0, x_out - x_in, 2), ACCENT)
-        p.fillRect(QRectF(x_in, h - 2, x_out - x_in, 2), ACCENT)
+        p.fillRect(QRectF(x_in, 0, x_out - x_in, 2), self._accent)
+        p.fillRect(QRectF(x_in, h - 2, x_out - x_in, 2), self._accent)
 
         self._draw_handle(p, x_in, left=True)
         self._draw_handle(p, x_out, left=False)
@@ -376,8 +387,8 @@ class Timeline(QWidget):
         rect = QRectF(x - HANDLE_W if left else x, (h - 30) / 2, HANDLE_W, 30)
         path = QPainterPath()
         path.addRoundedRect(rect, 2.5, 2.5)
-        p.fillPath(path, ACCENT)
-        p.setPen(QPen(QColor(40, 30, 10), 1))
+        p.fillPath(path, self._accent)
+        p.setPen(QPen(self._grip, 1))
         for i in (-2, 1):
             gx = rect.center().x() + i
             p.drawLine(QPointF(gx, rect.top() + 8), QPointF(gx, rect.bottom() - 8))

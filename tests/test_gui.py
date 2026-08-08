@@ -544,6 +544,83 @@ class OutputNaming(unittest.TestCase):
 
 
 @unittest.skipUnless(REAL_WINDOWS, "needs a real display")
+class AccentColour(unittest.TestCase):
+    """Picking an accent has to reach both the stylesheet and the timeline.
+
+    The timeline paints itself rather than being styled by Qt, so it is the
+    half that silently keeps the old colour if only the sheet is updated.
+    """
+
+    def setUp(self):
+        import theme
+        from apricot import ApricotStudio
+        self.theme = theme
+        self.window = ApricotStudio()
+        self.window.show()
+        self.addCleanup(self._restore)
+
+    def _restore(self):
+        self.window._apply_accent(self.theme.DEFAULT_ACCENT)
+        dispose(self.window)
+
+    def test_starts_on_apricot(self):
+        self.assertEqual(self.window._accent, "#e27125")
+
+    def test_choosing_one_repaints_the_timeline_too(self):
+        self.window._apply_accent("#3d92e0")
+        self.assertEqual(self.window._timeline._accent.name(), "#3d92e0")
+
+    def test_choosing_one_restyles_the_window(self):
+        self.window._apply_accent("#26a69a")
+        self.assertIn("#26a69a", self.window.styleSheet())
+        self.assertNotIn("#e27125", self.window.styleSheet())
+
+    def test_the_handle_grip_stays_legible(self):
+        # Drawn on top of the accent, so it cannot be a fixed colour.
+        for _, colour in self.theme.ACCENTS:
+            self.window._apply_accent(colour)
+            grip = self.window._timeline._grip.name()
+            self.assertGreaterEqual(self.theme.contrast(colour, grip), 4.5,
+                                    f"grip on {colour} is unreadable")
+
+    def test_every_choice_applies_without_error(self):
+        for _, colour in self.theme.ACCENTS:
+            self.window._apply_accent(colour)
+            self.assertEqual(self.window._accent, colour)
+            self.window._timeline.grab()          # must still paint
+
+    def test_the_choice_is_remembered(self):
+        from apricot import ApricotStudio
+        self.window._apply_accent("#9bbf3c")
+        again = ApricotStudio()
+        try:
+            self.assertEqual(again._accent, "#9bbf3c")
+        finally:
+            dispose(again)
+
+    def test_a_corrupt_stored_choice_falls_back(self):
+        from apricot import ApricotStudio
+        self.window._settings.setValue("accent", "not-a-colour")
+        again = ApricotStudio()
+        try:
+            self.assertEqual(again._accent, self.theme.DEFAULT_ACCENT)
+        finally:
+            dispose(again)
+            self.window._settings.setValue("accent", self.theme.DEFAULT_ACCENT)
+
+    def test_the_swatch_button_exists_and_never_takes_focus(self):
+        self.assertEqual(self.window._accent_btn.objectName(), "swatch")
+        self.assertEqual(self.window._accent_btn.focusPolicy(),
+                         Qt.FocusPolicy.NoFocus)
+
+    def test_the_menu_previews_every_colour(self):
+        icons = [self.window._swatch(colour) for _, colour in self.theme.ACCENTS]
+        self.assertEqual(len(icons), len(self.theme.ACCENTS))
+        for icon in icons:
+            self.assertFalse(icon.isNull(), "a colour was offered without a preview")
+
+
+@unittest.skipUnless(REAL_WINDOWS, "needs a real display")
 class CloseFile(unittest.TestCase):
     def setUp(self):
         import shutil

@@ -37,9 +37,9 @@ export QT_LOGGING_RULES="qt.multimedia.*=false;qt.core.qfuture.*=false"
 
 if (( FAST )); then
     echo "running fast tests (no encoding)"
-    PATTERNS=(test_units.py test_commands.py test_edges.py test_gui.py)
+    PATTERNS=(test_units.py test_commands.py test_theme.py test_edges.py test_gui.py)
 else
-    PATTERNS=(test_units.py test_commands.py test_edges.py test_gui.py test_encode.py)
+    PATTERNS=(test_units.py test_commands.py test_theme.py test_edges.py test_gui.py test_encode.py)
 fi
 
 start=$(date +%s)

@@ -15,7 +15,7 @@ import sys
 from dataclasses import dataclass
 
 from PyQt6.QtCore import QEvent, QSettings, Qt, QTimer, QUrl, pyqtSlot
-from PyQt6.QtGui import QDesktopServices, QIcon
+from PyQt6.QtGui import QColor, QDesktopServices, QIcon, QPainter, QPixmap
 from PyQt6.QtMultimedia import QAudioOutput, QMediaPlayer
 from PyQt6.QtMultimediaWidgets import QVideoWidget
 from PyQt6.QtWidgets import (QApplication, QCheckBox, QComboBox, QFileDialog,
@@ -24,6 +24,7 @@ from PyQt6.QtWidgets import (QApplication, QCheckBox, QComboBox, QFileDialog,
                              QSizePolicy, QVBoxLayout, QWidget)
 
 import export
+import theme
 from media import (KeyframeLoader, MediaInfo, ThumbnailLoader, WaveformLoader,
                    fmt_tc, parse_tc, probe)
 from timeline import Timeline
@@ -55,65 +56,6 @@ QUALITY_CHOICES = [
     ("Fit 50 MB", "Discord Nitro Basic.", export.SOURCE_QUALITY, 50_000_000),
     ("Fit 100 MB", "Discord Nitro.", export.SOURCE_QUALITY, 100_000_000),
 ]
-
-STYLE = """
-QMainWindow, QWidget { background: #1c1e22; color: #e6e8ec; }
-QLabel { color: #e6e8ec; }
-QLabel#meta { color: #9aa2b1; }
-QLabel#status { color: #9aa2b1; }
-QLabel#title { font-size: 13px; font-weight: 600; }
-QLabel#duration { color: #ffb02e; font-weight: 600; }
-QPushButton {
-    background: #2a2e35; border: 1px solid #383d47; border-radius: 5px;
-    padding: 5px 11px; color: #e6e8ec;
-}
-QPushButton:hover { background: #333842; }
-QPushButton:pressed { background: #23262c; }
-QPushButton:disabled { color: #6a7181; background: #24272d; }
-QPushButton#primary {
-    background: #ffb02e; border: 1px solid #ffb02e; color: #241a06; font-weight: 600;
-    padding: 7px 22px;
-}
-QPushButton#primary:hover { background: #ffc154; }
-QPushButton#primary:disabled { background: #4a4028; border-color: #4a4028; color: #8d8467; }
-QPushButton#step { padding: 4px 7px; font-family: monospace; }
-QLineEdit {
-    background: #14161a; border: 1px solid #383d47; border-radius: 5px;
-    padding: 5px 8px; color: #e6e8ec; selection-background-color: #ffb02e;
-    selection-color: #241a06;
-}
-QLineEdit:focus { border-color: #ffb02e; }
-QLineEdit#tc { font-family: monospace; max-width: 130px; }
-QComboBox {
-    background: #2a2e35; border: 1px solid #383d47; border-radius: 5px;
-    padding: 4px 8px; color: #e6e8ec; min-width: 96px;
-}
-QComboBox:hover { background: #333842; }
-QComboBox:disabled { color: #6a7181; background: #24272d; }
-QComboBox::drop-down { border: none; width: 16px; }
-QComboBox QAbstractItemView {
-    background: #22252b; border: 1px solid #383d47; color: #e6e8ec;
-    selection-background-color: #ffb02e; selection-color: #241a06; outline: none;
-}
-QMenu { background: #22252b; border: 1px solid #383d47; color: #e6e8ec; }
-QMenu::item:selected { background: #ffb02e; color: #241a06; }
-QLabel#badge { color: #ffb02e; font-weight: 600; }
-QLabel#badgeFast { color: #6ee7a0; font-weight: 600; }
-QCheckBox { color: #9aa2b1; spacing: 6px; }
-QCheckBox:disabled { color: #5a616f; }
-/* Armed, this destroys a file. It should not look like the other options. */
-QCheckBox:checked { color: #ff8080; font-weight: 600; }
-QCheckBox::indicator { width: 13px; height: 13px; border-radius: 3px;
-                       border: 1px solid #4a505d; background: #14161a; }
-QCheckBox::indicator:checked { background: #e05252; border-color: #e05252; }
-QProgressBar {
-    background: #14161a; border: 1px solid #383d47; border-radius: 5px;
-    height: 8px; text-align: center; color: transparent;
-}
-QProgressBar::chunk { background: #ffb02e; border-radius: 4px; }
-QFrame#sep { background: #2a2e35; max-height: 1px; border: none; }
-"""
-
 
 @dataclass(frozen=True)
 class Exported:
@@ -173,8 +115,10 @@ class ApricotStudio(QMainWindow):
         self._exporter.progress.connect(self._on_export_progress)
         self._exporter.finished.connect(self._on_export_finished)
 
+        self._accent = theme.normalise(
+            self._settings.value("accent", theme.DEFAULT_ACCENT, type=str))
         self._build_ui()
-        self.setStyleSheet(STYLE)
+        self._apply_accent(self._accent, save=False)
         self._set_loaded(False)
         QApplication.instance().installEventFilter(self)
 
@@ -219,10 +163,13 @@ class ApricotStudio(QMainWindow):
         titles.addWidget(self._meta)
         self._close_btn = self._button("Close", self.close_file,
                                        "Unload this video (Ctrl+W)")
+        self._accent_btn = self._button("", self._choose_accent,
+                                        "Accent colour", "swatch")
         header.addWidget(self._open_btn)
         header.addWidget(self._recent_btn)
         header.addSpacing(6)
         header.addLayout(titles, 1)
+        header.addWidget(self._accent_btn)
         header.addWidget(self._close_btn)
         outer.addLayout(header)
 
@@ -330,7 +277,6 @@ class ApricotStudio(QMainWindow):
         self._audio_box.currentIndexChanged.connect(self._on_options_changed)
 
         self._size_box = QComboBox()
-        self._size_box.setMinimumWidth(190)
         for text, tip, quality, target in QUALITY_CHOICES:
             self._size_box.addItem(text, (quality, target))
             self._size_box.setItemData(self._size_box.count() - 1, tip,
@@ -338,9 +284,11 @@ class ApricotStudio(QMainWindow):
         self._size_box.currentIndexChanged.connect(self._on_options_changed)
 
         # Like the buttons, these never take focus, so Space stays play/pause
-        # instead of popping a dropdown open.
+        # instead of popping a dropdown open. AdjustToContents stops the longest
+        # entry ("Smallest worth keeping") being elided to "Smallest worth s...".
         for box in (self._fmt_box, self._audio_box, self._size_box):
             box.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+            box.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToContents)
 
         self._audio_label = QLabel("Audio")
         opts.addWidget(QLabel("Format"))
@@ -352,7 +300,7 @@ class ApricotStudio(QMainWindow):
         opts.addWidget(QLabel("Quality"))
         opts.addWidget(self._size_box)
         opts.addSpacing(18)
-        self._delete_source = QCheckBox("Delete original after export")
+        self._delete_source = QCheckBox("Delete original")
         self._delete_source.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         self._delete_source.setToolTip(
             "After a successful export, offer to remove the file you cut from.\n"
@@ -411,6 +359,42 @@ class ApricotStudio(QMainWindow):
             widget.setEnabled(loaded)
 
     # ----- recent files -------------------------------------------------
+
+    # ----- accent -------------------------------------------------------
+
+    @staticmethod
+    def _swatch(colour: str, size: int = 14) -> QIcon:
+        """A filled square for the menu, so the choice is shown not described."""
+        pixmap = QPixmap(size, size)
+        pixmap.fill(Qt.GlobalColor.transparent)
+        painter = QPainter(pixmap)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        painter.setBrush(QColor(colour))
+        painter.setPen(QColor(theme.lighten(colour, 0.25)))
+        painter.drawRoundedRect(0, 0, size - 1, size - 1, 3, 3)
+        painter.end()
+        return QIcon(pixmap)
+
+    def _choose_accent(self) -> None:
+        menu = QMenu(self)
+        for name, colour in theme.ACCENTS:
+            action = menu.addAction(self._swatch(colour), name)
+            action.setCheckable(True)
+            action.setChecked(colour == self._accent)
+            action.triggered.connect(lambda _=False, c=colour: self._apply_accent(c))
+        menu.exec(self._accent_btn.mapToGlobal(self._accent_btn.rect().bottomLeft()))
+
+    def _apply_accent(self, colour: str, save: bool = True) -> None:
+        """Restyle everything around a new accent, and remember it."""
+        self._accent = theme.normalise(colour)
+        self.setStyleSheet(theme.stylesheet(self._accent))
+        self._timeline.set_accent(self._accent)
+        if save:
+            self._settings.setValue("accent", self._accent)
+        # The badge swaps objectName between accent and lossless colours, so it
+        # needs re-polishing whenever the sheet is replaced.
+        self._badge.style().unpolish(self._badge)
+        self._badge.style().polish(self._badge)
 
     def _migrate_settings(self) -> None:
         """Carry settings over from the name this app used to have.

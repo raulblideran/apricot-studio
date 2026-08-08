@@ -119,6 +119,25 @@ keeping. It never acts on its own:
 Afterwards the file is closed, dropped from Recent, and the window returns to
 its empty state — it will not sit there showing a file that no longer exists.
 
+## Accent colour
+
+The swatch in the top-right opens eleven accents, each shown as a colour rather
+than described. **Apricot** (`#e27125`) is the default; the choice applies
+immediately and is remembered.
+
+They span the hue wheel at roughly even lightness, so switching changes the
+colour without changing how heavy the interface looks. Every one clears
+**4.5:1** against the window background — the accent is used for text, not only
+for fills — and the closest pair is ΔE 17 apart, so none of them are hard to
+tell from another.
+
+Two colours deliberately ignore the accent, because they are statements rather
+than decoration: **green** for "this export is a lossless copy" and **red** for
+"this will delete your original". No accent in the palette comes close enough to
+either to be mistaken for it, so picking a green accent cannot make the delete
+checkbox look reassuring. Text drawn on top of the accent is computed from its
+luminance, so a dark colour would stay legible too.
+
 ## What "inherits the settings" means
 
 `ffprobe` reads the source once and every encoding decision follows from it:
@@ -160,12 +179,13 @@ since AV1 in software is far too slow at 4K.
 | `media.py` | ffprobe, keyframes, waveform, filmstrip |
 | `export.py` | builds and runs the ffmpeg cut |
 | `timeline.py` | the timeline widget |
+| `theme.py` | accent palette and the stylesheet built from it |
 | `tests/` | the test suite |
 
 ## Tests
 
 ```sh
-./run-tests.sh           # 234 tests, ~24s (real encodes)
+./run-tests.sh           # 271 tests, ~27s (real encodes)
 ./run-tests.sh --fast    # ~4s, skips anything that invokes ffmpeg
 ./run-tests.sh -v        # one line per test
 ```
@@ -181,7 +201,8 @@ it this project's only dependency.
 | `test_commands.py` | the ffmpeg arguments produced for every combination of options |
 | `test_edges.py` | malformed input, hostile filenames, degenerate ranges, unreadable sources |
 | `test_encode.py` | real exports: bit-identity, durations, A/V sync, GOP structure, formats |
-| `test_gui.py` | timeline geometry, zoom, snapping, painting, focus, delete targeting |
+| `test_theme.py` | palette contrast, distinctness, and the derived stylesheet |
+| `test_gui.py` | timeline geometry, zoom, snapping, painting, focus, accent, delete targeting |
 
 Fixtures are synthesised with ffmpeg into `/tmp` — the suite never reads your
 video library. The `allp` fixture deliberately mirrors a gpu-screen-recorder
