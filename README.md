@@ -10,16 +10,58 @@ opening kdenlive or DaVinci.
 
 ## Install
 
+### As a Flatpak
+
+```sh
+flatpak install --user apricot-studio.flatpak
+```
+
+Self-contained: Qt comes from `org.kde.Platform`, and the bundle carries its own
+ffmpeg built with libx264 and libx265. Nothing is required from the host.
+
+To build it yourself:
+
+```sh
+flatpak install --user flathub org.flatpak.Builder org.kde.Sdk//6.11
+flatpak run org.flatpak.Builder --user --force-clean --install \
+    --repo=repo build-dir io.github.raulblideran.ApricotStudio.yaml
+```
+
+### Straight from the source tree
+
 ```sh
 ./install.sh
 ```
 
 Everything lands under `~/.local`, so nothing touches the rpm-ostree base image
-and it survives Bazzite updates. Afterwards Apricot Studio is in the app menu and in
-Dolphin's right-click → *Open With*. Remove it with `./install.sh --uninstall`.
+and it survives Bazzite updates. It uses the system `ffmpeg` and the system
+PyQt6, which Bazzite already ships — no pip, no venv, no layered packages.
+Remove it with `./install.sh --uninstall`.
 
-There is nothing to download: it uses the system `ffmpeg` and the system PyQt6,
-both of which Bazzite already ships. No pip, no venv, no layered packages.
+**Do not run both at once.** They share a desktop ID, and the flatpak's export
+directory comes first in `XDG_DATA_DIRS`, so the flatpak wins in the app menu
+while `apricot-studio` in a terminal still runs the source tree. Pick one.
+
+## Why the Flatpak is GPL
+
+The KDE runtime's ffmpeg is built without libx264 and libx265, because those are
+GPL. H.264 is what screen recorders produce and therefore what this app spends
+its time on, so the manifest builds x264, x265 and ffmpeg from source. Linking
+them is what makes the bundle **GPL-3.0-or-later**; the alternative was falling
+back to `h264_vaapi`, which is measurably worse at the same bitrate and needs a
+GPU that can encode H.264 at all.
+
+Three details worth recording, since each cost a build to find:
+
+- x265 sets CMake policies `CMP0025` and `CMP0054` to `OLD`, which CMake 4 — what
+  the Sdk ships — refuses outright. The manifest patches them to `NEW`.
+- SVT-AV1 3.x changed `svt_av1_enc_init_handle` from three arguments to two, so
+  ffmpeg 7.x will not compile against the runtime. The manifest uses ffmpeg 8.0.
+- PyQt6 is installed from its wheel with `--no-deps`, deliberately skipping
+  `PyQt6-Qt6`. The bindings bundle no Qt of their own, so they bind to the
+  runtime's. But Qt then looks for its plugins inside the PyQt6 package, which
+  is empty — without `QT_PLUGIN_PATH` pointing at the runtime there is no
+  platform plugin and the window never opens.
 
 ## Use
 

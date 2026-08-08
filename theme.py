@@ -1,3 +1,10 @@
+# Apricot Studio -- a small video trimmer.
+# Copyright (C) 2026 Raul Blideran
+#
+# This program is free software: you can redistribute it and/or modify it under
+# the terms of the GNU General Public License as published by the Free Software
+# Foundation, either version 3 of the License, or (at your option) any later
+# version. See the LICENSE file for the full text.
 """Accent colours, and the stylesheet derived from whichever one is chosen.
 
 The accent is the interactive colour: the export button, the in/out handles,

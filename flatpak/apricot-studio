@@ -1,0 +1,4 @@
+#!/bin/sh
+# Launcher inside the flatpak. /app/bin is ahead of /usr/bin on PATH, so the
+# ffmpeg built with x264/x265 in this bundle is the one the app finds.
+exec python3 /app/share/apricot-studio/apricot.py "$@"

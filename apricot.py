@@ -1,4 +1,11 @@
 #!/usr/bin/env python3
+# Apricot Studio -- a small video trimmer.
+# Copyright (C) 2026 Raul Blideran
+#
+# This program is free software: you can redistribute it and/or modify it under
+# the terms of the GNU General Public License as published by the Free Software
+# Foundation, either version 3 of the License, or (at your option) any later
+# version. See the LICENSE file for the full text.
 """Apricot Studio -- open a video, mark in and out, export the clip.
 
 The export inherits every setting from the source file, so there is nothing to
