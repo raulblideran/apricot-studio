@@ -12,20 +12,47 @@ opening kdenlive or DaVinci.
 
 ### As a Flatpak
 
+Download `apricot-studio.flatpak` from the
+[latest release](https://github.com/raulblideran/apricot-studio/releases), then:
+
 ```sh
 flatpak install --user apricot-studio.flatpak
 ```
 
-Self-contained: Qt comes from `org.kde.Platform`, and the bundle carries its own
-ffmpeg built with libx264 and libx265. Nothing is required from the host.
+Nothing else is required — no Python, no PyQt6, no ffmpeg. The bundle carries
+its own ffmpeg built with libx264 and libx265, and Qt comes from the KDE
+runtime.
 
-To build it yourself:
+The bundle is 16 MB because it holds only the app. It needs
+`org.kde.Platform//6.11`, which is about 1.1 GB. If you already run any KDE
+Flatpak — kdenlive, Haruna — you have it and the install is instant. Otherwise
+Flatpak fetches it once, and every KDE app afterwards shares it.
+
+### Building the Flatpak yourself
 
 ```sh
 flatpak install --user flathub org.flatpak.Builder org.kde.Sdk//6.11
+
 flatpak run org.flatpak.Builder --user --force-clean --install \
     --repo=repo build-dir io.github.raulblideran.ApricotStudio.yaml
 ```
+
+That installs it locally. To produce a bundle to give to someone else:
+
+```sh
+flatpak build-bundle --runtime-repo=https://flathub.org/repo/flathub.flatpakrepo \
+    repo apricot-studio.flatpak io.github.raulblideran.ApricotStudio master
+```
+
+**`--runtime-repo` is not optional.** Without it the bundle names the runtime it
+needs but not where to find it, so it installs fine for anyone who already has
+that runtime and fails for everyone else — which is easy to miss when testing on
+a machine that has it. With the flag, Flatpak offers to add Flathub and fetch
+the runtime itself.
+
+The first build compiles x264, x265 and ffmpeg, so expect several minutes.
+Rebuilds after a code change take seconds: those modules are cached and only the
+app module runs again.
 
 ### Straight from the source tree
 
