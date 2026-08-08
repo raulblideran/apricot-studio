@@ -78,10 +78,17 @@ class Options:
 
     fmt: str = SOURCE                  # SOURCE | WEBM | GIF
     audio: str | int = ALL_AUDIO       # ALL_AUDIO | NO_AUDIO | track index
-    target_bytes: int = 0              # 0 = inherit the source's bitrate
+    target_bytes: int = 0              # 0 = quality-driven rather than size-driven
+    quality: str = SOURCE_QUALITY      # SOURCE_QUALITY | SMALLER | SMALLEST
 
     def ext_for(self, info: MediaInfo) -> str:
         return {WEBM: "webm", GIF: "gif"}.get(self.fmt, info.ext)
+
+    @property
+    def inherits_everything(self) -> bool:
+        """Whether this reproduces the source rather than deviating from it."""
+        return (self.fmt == SOURCE and not self.target_bytes
+                and self.quality == SOURCE_QUALITY)
 
 
 @dataclass(frozen=True)
@@ -161,6 +168,28 @@ def target_video_bitrate(info: MediaInfo, options: Options, duration: float) -> 
     return max(min(int(video_bps), MAX_BITRATE), 100_000)
 
 
+def estimate_bytes(info: MediaInfo, options: Options, duration: float) -> int:
+    """Roughly how large the export will be, for showing before it runs.
+
+    An estimate, not a promise: quality-driven encodes come in under their
+    ceiling on easy footage. A size target is the one case that is close to
+    exact, because the bitrate was solved from it.
+    """
+    if duration <= 0:
+        return 0
+    if options.fmt == GIF:
+        return 0                      # palette output is not predictable enough
+    if options.target_bytes:
+        return int(options.target_bytes * SIZE_MARGIN)
+
+    audio_bps = _selected_audio_bitrate(info, options)
+    if options.fmt == WEBM:
+        video_bps = info.v_bitrate * WEBM_RATE_FACTOR
+    else:
+        video_bps = info.v_bitrate * QUALITY_RATE.get(options.quality, 1.0)
+    return int((video_bps + audio_bps) * duration / 8)
+
+
 def _gop_size(info: MediaInfo, keyframes: list[float]) -> int:
     """The source's keyframe interval in frames, so the clip behaves like it."""
     if len(keyframes) >= 3:
@@ -202,12 +231,16 @@ def _video_args(info: MediaInfo, options: Options = Options(),
         return [], ["-c:v", "libx264", "-preset", PRESET["h264"],
                     "-bf", str(info.has_b_frames), *rate_args], "libx264"
 
-    # One second of VBV at the source's bitrate.
-    vbv = (["-maxrate", str(info.v_bitrate), "-bufsize", str(info.v_bitrate)]
-           if info.v_bitrate else [])
+    # A ceiling expressed as a share of the source's own bitrate, so a preset
+    # means the same thing whatever the file is, plus one second of VBV.
+    share = QUALITY_RATE.get(options.quality, 1.0)
+    ceiling = int(info.v_bitrate * share)
+    vbv = ["-maxrate", str(ceiling), "-bufsize", str(ceiling)] if ceiling else []
+    offset = QUALITY_CRF.get(options.quality, 0)
 
     if codec == "h264":
-        args = ["-c:v", "libx264", "-preset", PRESET["h264"], "-crf", CRF["h264"],
+        args = ["-c:v", "libx264", "-preset", PRESET["h264"],
+                "-crf", str(CRF["h264"] + offset),
                 "-bf", str(info.has_b_frames), *vbv]
         if info.encoder_profile:
             args += ["-profile:v", info.encoder_profile]
@@ -217,7 +250,8 @@ def _video_args(info: MediaInfo, options: Options = Options(),
         # x265 is loud on stderr by default, and its CRF scale sits a couple of
         # points above x264's for equivalent quality. It takes its B-frame count
         # through x265-params rather than -bf.
-        args = ["-c:v", "libx265", "-preset", PRESET["hevc"], "-crf", CRF["hevc"],
+        args = ["-c:v", "libx265", "-preset", PRESET["hevc"],
+                "-crf", str(CRF["hevc"] + offset),
                 "-x265-params", f"log-level=error:bframes={info.has_b_frames}", *vbv]
         if info.encoder_profile:
             args += ["-profile:v", info.encoder_profile]
@@ -238,7 +272,8 @@ def _video_args(info: MediaInfo, options: Options = Options(),
         return [], ["-c:v", "libsvtav1", "-preset", "8", "-crf", "30"], "libsvtav1"
 
     # Unknown codec: fall back to H.264, which every player handles.
-    return [], ["-c:v", "libx264", "-preset", PRESET["h264"], "-crf", CRF["h264"],
+    return [], ["-c:v", "libx264", "-preset", PRESET["h264"],
+                "-crf", str(CRF["h264"] + offset),
                 "-bf", str(info.has_b_frames), *vbv], "libx264"
 
 
@@ -272,7 +307,9 @@ def build(info: MediaInfo, start: float, end: float, output: str,
     duration = max(end - start, info.frame_duration)
 
     # Starting exactly on a keyframe means nothing has to be decoded at all.
-    if options.fmt == SOURCE and not options.target_bytes:
+    # A copy reproduces the source exactly, so it is only valid when nothing was
+    # asked to differ from it -- a smaller-quality preset rules it out too.
+    if options.inherits_everything:
         exact = on_keyframe(start, keyframes)
         if exact is not None:
             return _build_lossless(info, exact, end - exact, output, options)

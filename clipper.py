@@ -36,10 +36,25 @@ MAX_RECENT = 10
 # Below this an "export" cannot be a real clip, and the original must be kept.
 MIN_CLIP_BYTES = 1024
 
-# Common upload ceilings. The value is bytes; 0 means inherit the source.
-SIZE_CHOICES = [("Match source", 0), ("10 MB  ·  Discord", 10_000_000),
-                ("25 MB", 25_000_000), ("50 MB  ·  Nitro Basic", 50_000_000),
-                ("100 MB", 100_000_000)]
+# What the export may be, described by intent rather than by numbers. Each entry
+# is (label, tooltip, quality preset, size target in bytes). The presets scale
+# against the source's own bitrate, so "smaller" means smaller than this file.
+QUALITY_CHOICES = [
+    ("Same as source", "Reproduces the original: same bitrate, same everything.\n"
+                       "Cuts on a keyframe are copied rather than re-encoded.",
+     export.SOURCE_QUALITY, 0),
+    ("Smaller file", "About half the original bitrate. Noticeably lighter,\n"
+                     "still good enough to watch full screen.",
+     export.SMALLER, 0),
+    ("Smallest worth keeping", "Roughly a third of the original bitrate.\n"
+                               "Visibly compressed on close inspection.",
+     export.SMALLEST, 0),
+    ("Fit 10 MB", "Discord's free upload limit.", export.SOURCE_QUALITY, 10_000_000),
+    ("Fit 25 MB", "Comfortable for most chat apps and email.",
+     export.SOURCE_QUALITY, 25_000_000),
+    ("Fit 50 MB", "Discord Nitro Basic.", export.SOURCE_QUALITY, 50_000_000),
+    ("Fit 100 MB", "Discord Nitro.", export.SOURCE_QUALITY, 100_000_000),
+]
 
 STYLE = """
 QMainWindow, QWidget { background: #1c1e22; color: #e6e8ec; }
@@ -201,10 +216,13 @@ class Clipper(QMainWindow):
         self._meta.setObjectName("meta")
         titles.addWidget(self._title)
         titles.addWidget(self._meta)
+        self._close_btn = self._button("Close", self.close_file,
+                                       "Unload this video (Ctrl+W)")
         header.addWidget(self._open_btn)
         header.addWidget(self._recent_btn)
         header.addSpacing(6)
         header.addLayout(titles, 1)
+        header.addWidget(self._close_btn)
         outer.addLayout(header)
 
         outer.addWidget(self._video, 1)
@@ -274,13 +292,27 @@ class Clipper(QMainWindow):
         outer.addWidget(self._separator())
 
         # Output ---------------------------------------------------------
+        # Folder and name are separate so the name can be typed once and kept
+        # across exports, rather than being rewritten by a generated path.
         out_row = QHBoxLayout()
         out_row.setSpacing(6)
-        out_row.addWidget(QLabel("Save to"))
-        self._out_path = QLineEdit()
-        self._out_path.returnPressed.connect(self._out_path.clearFocus)
-        out_row.addWidget(self._out_path, 1)
+        self._out_dir = QLineEdit()
+        self._out_dir.setToolTip("Folder the clip is written to")
+        self._out_name = QLineEdit()
+        self._out_name.setObjectName("name")
+        self._out_name.setToolTip("Clip name, without the extension")
+        self._out_ext = QLabel(".mp4")
+        self._out_ext.setObjectName("meta")
+        for edit in (self._out_dir, self._out_name):
+            edit.returnPressed.connect(edit.clearFocus)
+        self._out_name.textChanged.connect(self._update_badge)
+        out_row.addWidget(QLabel("Folder"))
+        out_row.addWidget(self._out_dir, 2)
         out_row.addWidget(self._button("…", self.choose_output, "Choose where to save"))
+        out_row.addSpacing(12)
+        out_row.addWidget(QLabel("Name"))
+        out_row.addWidget(self._out_name, 1)
+        out_row.addWidget(self._out_ext)
         outer.addLayout(out_row)
 
         # Anything that can deviate from the source lives here. Defaults inherit
@@ -297,8 +329,11 @@ class Clipper(QMainWindow):
         self._audio_box.currentIndexChanged.connect(self._on_options_changed)
 
         self._size_box = QComboBox()
-        for text, value in SIZE_CHOICES:
-            self._size_box.addItem(text, value)
+        self._size_box.setMinimumWidth(190)
+        for text, tip, quality, target in QUALITY_CHOICES:
+            self._size_box.addItem(text, (quality, target))
+            self._size_box.setItemData(self._size_box.count() - 1, tip,
+                                       Qt.ItemDataRole.ToolTipRole)
         self._size_box.currentIndexChanged.connect(self._on_options_changed)
 
         # Like the buttons, these never take focus, so Space stays play/pause
@@ -313,7 +348,7 @@ class Clipper(QMainWindow):
         opts.addWidget(self._audio_label)
         opts.addWidget(self._audio_box)
         opts.addSpacing(12)
-        opts.addWidget(QLabel("Size"))
+        opts.addWidget(QLabel("Quality"))
         opts.addWidget(self._size_box)
         opts.addSpacing(18)
         self._delete_source = QCheckBox("Delete original after export")
@@ -369,8 +404,9 @@ class Clipper(QMainWindow):
 
     def _set_loaded(self, loaded: bool) -> None:
         for widget in (self._play_btn, self._export_btn, self._in_edit,
-                       self._out_edit, self._out_path, self._fmt_box,
-                       self._audio_box, self._size_box, self._delete_source):
+                       self._out_edit, self._out_dir, self._out_name,
+                       self._fmt_box, self._audio_box, self._size_box,
+                       self._delete_source, self._close_btn):
             widget.setEnabled(loaded)
 
     # ----- recent files -------------------------------------------------
@@ -423,6 +459,17 @@ class Clipper(QMainWindow):
             event.acceptProposedAction()
             self.load(path)
 
+    def close_file(self) -> None:
+        """Unload the current video and go back to the empty window."""
+        if not self._info:
+            return
+        if self._exporter.running:
+            QMessageBox.information(self, "Export in progress",
+                                    "Cancel the export before closing this file.")
+            return
+        self._close_source()
+        self._status.setText("")
+
     def open_file(self) -> None:
         start = os.path.dirname(self._info.path) if self._info else os.path.expanduser("~/Videos")
         path, _ = QFileDialog.getOpenFileName(
@@ -453,7 +500,7 @@ class Clipper(QMainWindow):
         self._player.pause()
         self._set_loaded(True)
         self._rebuild_audio_box(info)
-        self._out_path.setText(export.default_output(path, self._options().ext_for(info)))
+        self._suggest_output(path)
         self._reveal_btn.setVisible(False)
         self._sync_marks()
         self._update_clock(0)
@@ -488,19 +535,37 @@ class Clipper(QMainWindow):
         audio = self._audio_box.currentData()
         if audio is None:
             audio = export.ALL_AUDIO
-        size = self._size_box.currentData() or 0
+        quality, target = self._size_box.currentData() or (export.SOURCE_QUALITY, 0)
         # A size target is meaningless for GIF, whose rate control is a palette.
-        return export.Options(fmt=fmt, audio=audio,
-                              target_bytes=0 if fmt == export.GIF else size)
+        return export.Options(fmt=fmt, audio=audio, quality=quality,
+                              target_bytes=0 if fmt == export.GIF else target)
+
+    def _output_path(self) -> str:
+        """Folder and name recombined, with the extension the format implies."""
+        folder = os.path.expanduser(self._out_dir.text().strip())
+        name = self._out_name.text().strip()
+        if not folder or not name:
+            return ""
+        ext = self._options().ext_for(self._info) if self._info else "mp4"
+        # Typing "clip.mp4" into the name box should not yield "clip.mp4.mp4".
+        stem, typed = os.path.splitext(name)
+        if typed.lstrip(".").lower() == ext.lower():
+            name = stem
+        return os.path.join(folder, f"{name}.{ext}")
+
+    def _suggest_output(self, source: str) -> None:
+        """Fill in a destination that will not collide with anything."""
+        ext = self._options().ext_for(self._info) if self._info else "mp4"
+        suggestion = export.default_output(source, ext)
+        self._out_dir.setText(os.path.dirname(suggestion))
+        self._out_name.setText(os.path.splitext(os.path.basename(suggestion))[0])
+        self._out_ext.setText(f".{ext}")
 
     def _on_format_changed(self) -> None:
         if not self._info:
             return
-        # Keep the destination's extension honest about what will be written.
-        current = self._out_path.text().strip()
-        want = self._options().ext_for(self._info)
-        if current:
-            self._out_path.setText(os.path.splitext(current)[0] + "." + want)
+        # The name is the user's; only the extension follows the format.
+        self._out_ext.setText(f".{self._options().ext_for(self._info)}")
         self._on_options_changed()
 
     def _on_options_changed(self) -> None:
@@ -516,18 +581,28 @@ class Clipper(QMainWindow):
             return
         options = self._options()
         start = self._timeline.in_point
-        if (options.fmt == export.SOURCE and not options.target_bytes
+        span = max(self._timeline.out_point - start, 0.0)
+        size = export.estimate_bytes(self._info, options, span)
+        # "about" because a quality-driven encode comes in under its ceiling on
+        # easy footage; only a size target is close to exact.
+        estimate = f"  ·  about {size / 1_000_000:.0f} MB" if size else ""
+
+        if (options.inherits_everything
                 and export.on_keyframe(start, self._keyframes) is not None):
             # Colour carries the distinction; glyphs like a lightning bolt do not
             # render in this font and came out blank.
             self._badge.setObjectName("badgeFast")
-            self._badge.setText("Lossless copy  ·  instant, bit-perfect")
+            self._badge.setText(f"Lossless copy  ·  instant, bit-perfect{estimate}")
         else:
             self._badge.setObjectName("badge")
             label = export.encoder_label(self._info, options)
-            detail = ("matched to source" if not options.target_bytes
-                      else f"{options.target_bytes // 1_000_000} MB target")
-            self._badge.setText(f"Re-encode  ·  {detail}  ·  {label}")
+            if options.target_bytes:
+                detail = f"fitting {options.target_bytes // 1_000_000} MB"
+            elif options.quality != export.SOURCE_QUALITY:
+                detail = self._size_box.currentText().lower()
+            else:
+                detail = "matched to source"
+            self._badge.setText(f"Re-encode  ·  {detail}  ·  {label}{estimate}")
         # An objectName change needs a re-polish before the new rule applies.
         self._badge.style().unpolish(self._badge)
         self._badge.style().polish(self._badge)
@@ -680,10 +755,11 @@ class Clipper(QMainWindow):
     def choose_output(self) -> None:
         if not self._info:
             return
-        path, _ = QFileDialog.getSaveFileName(self, "Save clip as", self._out_path.text(),
+        path, _ = QFileDialog.getSaveFileName(self, "Save clip as", self._output_path(),
                                               f"Video files ({VIDEO_SUFFIXES});;All files (*)")
         if path:
-            self._out_path.setText(path)
+            self._out_dir.setText(os.path.dirname(path))
+            self._out_name.setText(os.path.splitext(os.path.basename(path))[0])
 
     def start_export(self) -> None:
         if not self._info or self._exporter.running:
@@ -693,7 +769,7 @@ class Clipper(QMainWindow):
             QMessageBox.information(self, "Nothing to export",
                                     "The in and out points are at the same place.")
             return
-        output = self._out_path.text().strip()
+        output = self._output_path()
         if not output:
             QMessageBox.information(self, "No destination", "Choose where to save the clip.")
             return
@@ -705,6 +781,17 @@ class Clipper(QMainWindow):
         if not os.path.isdir(folder):
             QMessageBox.warning(self, "No such folder", f"{folder} does not exist.")
             return
+        # The name is kept across exports rather than regenerated, so the second
+        # export of the same name would silently replace the first. Ask instead.
+        if os.path.exists(output):
+            reply = QMessageBox.question(
+                self, "Replace the existing clip?",
+                f"“{os.path.basename(output)}” already exists in that folder.\n\n"
+                "Exporting will overwrite it.",
+                QMessageBox.StandardButton.Save | QMessageBox.StandardButton.Cancel,
+                QMessageBox.StandardButton.Cancel)
+            if reply != QMessageBox.StandardButton.Save:
+                return
 
         self._player.pause()
         plan = export.build(self._info, start, end, output, self._keyframes,
@@ -737,10 +824,10 @@ class Clipper(QMainWindow):
         self._status.setText(message)
         self._reveal_btn.setVisible(ok)
         if ok and self._info:
-            self._last_output = self._out_path.text().strip()
-            # Don't let the next export silently overwrite this one.
-            self._out_path.setText(export.default_output(
-                self._info.path, self._options().ext_for(self._info)))
+            # The name stays exactly as typed: it is the user's, and rewriting
+            # it to a generated one discards a deliberate choice. Overwriting is
+            # prevented by asking before the export instead.
+            self._last_output = self._exported.output if self._exported else None
             if self._delete_source.isChecked():
                 # Let the "Saved…" message paint before a modal dialog covers it.
                 QTimer.singleShot(0, self._maybe_delete_source)
@@ -886,7 +973,9 @@ class Clipper(QMainWindow):
         self._title.setText("No file loaded")
         self._meta.setText("Open a video to begin")
         self.setWindowTitle("Clipper")
-        self._out_path.clear()
+        self._out_dir.clear()
+        self._out_name.clear()
+        self._out_ext.setText(".mp4")
         self._sel_label.setText("—")
         self._update_clock(0)
 
@@ -970,6 +1059,8 @@ class Clipper(QMainWindow):
             self._seek(0)
         elif key == Qt.Key.Key_End:
             self._seek(self._info.duration if self._info else 0)
+        elif key == Qt.Key.Key_W and ctrl:
+            self.close_file()
         elif key in (Qt.Key.Key_Return, Qt.Key.Key_Enter) and ctrl:
             self.start_export()
         elif key == Qt.Key.Key_Escape:

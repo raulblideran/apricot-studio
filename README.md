@@ -43,6 +43,7 @@ You can also drop a video onto the window, or pick one from **Recent**.
 | `+` `−` | zoom in / out |
 | `Home` `End` | jump to start / end |
 | `Ctrl`+`O` | open a file |
+| `Ctrl`+`W` | close the current file |
 | `Ctrl`+`Enter` | export |
 | `Esc` | cancel a running export |
 
@@ -54,8 +55,11 @@ The timeline shows a filmstrip, an audio waveform (the spikes are usually the
 moment you want) and ticks marking the source's keyframes. **Green ticks are
 free cut points** — see below.
 
-The clip is saved next to the source as `<name>_clip.mp4`, never overwriting an
-existing file. **Show in folder** appears after an export.
+**Folder** and **Name** are separate fields. The name is yours: it is suggested
+once when you open a file and then left alone, including after a render, so you
+can export, tweak the selection and export again without retyping it. If that
+would overwrite an existing clip you are asked first. **Show in folder** appears
+after an export, and **Close** unloads the file without touching it.
 
 ## Instant, lossless cuts
 
@@ -78,11 +82,21 @@ Defaults inherit everything, so leaving this row alone reproduces the source.
 |---|---|
 | **Format** | *Same as source*, **WebM** (VP9 + Opus), or **GIF** (480px, 15fps, with a proper generated palette). |
 | **Audio** | Keep, mute, or pick one track when the source has several — a capture with separate desktop and mic tracks lists both. |
-| **Size** | Solve the bitrate backwards from a target: 10 MB for Discord, 25, 50, 100. Aims safely under, since a size limit that gets exceeded is a rejected upload — a 10 MB target lands at ~8.6 MB. |
+| **Quality** | *Same as source*, *Smaller file*, *Smallest worth keeping*, or a size to fit: 10 / 25 / 50 / 100 MB. |
 
-WebM is software VP9 and genuinely slow (no GPU encodes VP9), roughly 5× the
-time of an H.264 export. GIF ignores the size target, since its rate control is
-a colour palette rather than a bitrate.
+The quality presets scale against **this file's** bitrate rather than some fixed
+number, so *Smaller file* means about half of whatever you opened — the same
+preset behaves sensibly on a 720p capture and a 4K one. Hover any entry for what
+it does. The badge shows the estimated size for your current selection and
+updates as you drag; measured against real encodes it lands within 3%.
+
+Only *Same as source* can be a lossless copy — asking for something smaller is,
+by definition, asking not to reproduce the original.
+
+Size targets aim safely under, since a limit that gets exceeded is a rejected
+upload: a 10 MB target lands around 8.9 MB. WebM is software VP9 and genuinely
+slow (no GPU encodes VP9), roughly 5× the time of an H.264 export. GIF has no
+size target, since its rate control is a colour palette rather than a bitrate.
 
 ## Deleting the original
 
@@ -151,7 +165,7 @@ since AV1 in software is far too slow at 4K.
 ## Tests
 
 ```sh
-./run-tests.sh           # 198 tests, ~22s (real encodes)
+./run-tests.sh           # 234 tests, ~24s (real encodes)
 ./run-tests.sh --fast    # ~4s, skips anything that invokes ffmpeg
 ./run-tests.sh -v        # one line per test
 ```

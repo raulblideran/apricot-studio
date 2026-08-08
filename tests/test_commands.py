@@ -271,6 +271,140 @@ class SizeTargetCeiling(unittest.TestCase):
                              "a size target without a cap is only a suggestion")
 
 
+class QualityPresets(unittest.TestCase):
+    """Presets scale against the source, so they mean the same for any file."""
+
+    def args_for(self, quality, **info_over):
+        options = export.Options(quality=quality)
+        return export.build(make_info(**info_over), 45.0, 59.0,
+                            "/tmp/o.mp4", KF, options).args
+
+    def test_source_quality_caps_at_the_source_bitrate(self):
+        info = make_info()
+        args = self.args_for(export.SOURCE_QUALITY)
+        self.assertEqual(int(value_after(args, "-maxrate")), info.v_bitrate)
+
+    def test_each_step_down_lowers_the_ceiling(self):
+        # Strictly lower, not merely non-increasing: presets that all resolve to
+        # the same ceiling would satisfy a sorted() check while doing nothing.
+        full, smaller, smallest = (
+            int(value_after(self.args_for(q), "-maxrate"))
+            for q in (export.SOURCE_QUALITY, export.SMALLER, export.SMALLEST))
+        self.assertLess(smaller, full)
+        self.assertLess(smallest, smaller)
+
+    def test_each_step_down_raises_crf(self):
+        full, smaller, smallest = (
+            int(value_after(self.args_for(q), "-crf"))
+            for q in (export.SOURCE_QUALITY, export.SMALLER, export.SMALLEST))
+        self.assertLess(full, smaller)
+        self.assertLess(smaller, smallest)
+
+    def test_the_presets_deliver_what_their_labels_promise(self):
+        # The dropdown tells the user "about half the bitrate" and "roughly a
+        # third". Those are claims, so pin them to literals -- comparing against
+        # QUALITY_RATE would just be reading the implementation back to itself
+        # and would accept a preset that quietly stopped meaning anything.
+        self.assertEqual(export.QUALITY_RATE[export.SOURCE_QUALITY], 1.0)
+        self.assertAlmostEqual(export.QUALITY_RATE[export.SMALLER], 0.5, delta=0.1)
+        self.assertAlmostEqual(export.QUALITY_RATE[export.SMALLEST], 1 / 3, delta=0.1)
+
+    def test_the_presets_are_meaningfully_apart(self):
+        # Steps a user cannot tell apart are worse than no steps at all.
+        rates = [export.QUALITY_RATE[q] for q in
+                 (export.SOURCE_QUALITY, export.SMALLER, export.SMALLEST)]
+        for higher, lower in zip(rates, rates[1:]):
+            self.assertLess(lower, higher * 0.8,
+                            "consecutive presets are too close to distinguish")
+
+    def test_the_ceiling_is_a_share_of_this_file_not_a_fixed_number(self):
+        # The same preset on a 2 Mb/s source and a 40 Mb/s one must differ.
+        small = int(value_after(self.args_for(export.SMALLER, v_bitrate=2_000_000),
+                                "-maxrate"))
+        large = int(value_after(self.args_for(export.SMALLER, v_bitrate=40_000_000),
+                                "-maxrate"))
+        self.assertAlmostEqual(large / small, 20, delta=0.5)
+
+    def test_b_frames_still_inherited_at_every_preset(self):
+        for quality in (export.SOURCE_QUALITY, export.SMALLER, export.SMALLEST):
+            self.assertEqual(value_after(self.args_for(quality, has_b_frames=0), "-bf"), "0")
+            self.assertEqual(value_after(self.args_for(quality, has_b_frames=2), "-bf"), "2")
+
+    def test_hevc_offsets_from_its_own_baseline(self):
+        args = self.args_for(export.SMALLER, v_codec="hevc", profile="Main")
+        self.assertEqual(int(value_after(args, "-crf")),
+                         export.CRF["hevc"] + export.QUALITY_CRF[export.SMALLER])
+
+    def test_a_reduced_preset_rules_out_a_stream_copy(self):
+        # A copy reproduces the source, which is not what "smaller" asked for.
+        for quality in (export.SMALLER, export.SMALLEST):
+            plan = export.build(make_info(), 44.000004, 58.0, "/tmp/o.mp4", KF,
+                                export.Options(quality=quality))
+            self.assertFalse(plan.lossless, f"{quality} must not stream-copy")
+
+    def test_source_quality_still_allows_a_copy(self):
+        plan = export.build(make_info(), 44.000004, 58.0, "/tmp/o.mp4", KF,
+                            export.Options(quality=export.SOURCE_QUALITY))
+        self.assertTrue(plan.lossless)
+
+    def test_inherits_everything_is_exact_about_what_it_claims(self):
+        self.assertTrue(export.Options().inherits_everything)
+        self.assertFalse(export.Options(quality=export.SMALLER).inherits_everything)
+        self.assertFalse(export.Options(target_bytes=10_000_000).inherits_everything)
+        self.assertFalse(export.Options(fmt=export.WEBM).inherits_everything)
+
+
+class SizeEstimates(unittest.TestCase):
+    """Shown before an export runs, so it has to be roughly honest."""
+
+    DURATION = 14.0
+
+    def estimate(self, **over):
+        return export.estimate_bytes(make_info(), export.Options(**over), self.DURATION)
+
+    def test_source_quality_estimates_near_the_source_bitrate(self):
+        info = make_info()
+        expected = (info.v_bitrate + info.total_audio_bitrate) * self.DURATION / 8
+        self.assertAlmostEqual(self.estimate(), expected, delta=expected * 0.02)
+
+    def test_smaller_presets_estimate_smaller(self):
+        full = self.estimate()
+        smaller = self.estimate(quality=export.SMALLER)
+        smallest = self.estimate(quality=export.SMALLEST)
+        self.assertLess(smaller, full)
+        self.assertLess(smallest, smaller)
+
+    def test_the_estimate_tracks_the_preset_it_was_given(self):
+        # Roughly half and roughly a third, not just "some smaller number".
+        full = self.estimate()
+        self.assertAlmostEqual(self.estimate(quality=export.SMALLER) / full,
+                               export.QUALITY_RATE[export.SMALLER], delta=0.06)
+        self.assertAlmostEqual(self.estimate(quality=export.SMALLEST) / full,
+                               export.QUALITY_RATE[export.SMALLEST], delta=0.06)
+
+    def test_a_size_target_estimates_just_under_the_limit(self):
+        estimate = self.estimate(target_bytes=10_000_000)
+        self.assertLessEqual(estimate, 10_000_000)
+        self.assertGreater(estimate, 8_000_000)
+
+    def test_muting_audio_lowers_the_estimate(self):
+        self.assertLess(self.estimate(audio=export.NO_AUDIO), self.estimate())
+
+    def test_gif_declines_to_guess(self):
+        # Palette output does not follow from a bitrate, so no number is better
+        # than a wrong one.
+        self.assertEqual(self.estimate(fmt=export.GIF), 0)
+
+    def test_zero_length_selection_estimates_nothing(self):
+        self.assertEqual(export.estimate_bytes(make_info(), export.Options(), 0.0), 0)
+
+    def test_estimate_scales_with_the_selection(self):
+        info, options = make_info(), export.Options()
+        short = export.estimate_bytes(info, options, 5.0)
+        long = export.estimate_bytes(info, options, 50.0)
+        self.assertAlmostEqual(long / short, 10, delta=0.1)
+
+
 class EncoderChoice(unittest.TestCase):
     def test_maps_each_codec_to_its_encoder(self):
         cases = {"h264": "libx264", "hevc": "libx265", "vp9": "libvpx-vp9"}

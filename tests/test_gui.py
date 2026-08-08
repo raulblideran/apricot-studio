@@ -364,7 +364,8 @@ class DeleteTargetsTheRightFile(unittest.TestCase):
         self.window._timeline.set_in(0.5)
         self.window._timeline.set_out(2.0)
         self.window._sync_marks()
-        self.window._out_path.setText(os.path.join(self.tmp, "clip.mp4"))
+        self.window._out_dir.setText(self.tmp)
+        self.window._out_name.setText("clip")
         self.window.start_export()
         recorded = self.window._exported
         self.assertIsNotNone(recorded)
@@ -424,7 +425,8 @@ class DeleteTargetsTheRightFile(unittest.TestCase):
         self.window._timeline.set_in(0.5)
         self.window._timeline.set_out(2.0)
         self.window._sync_marks()
-        self.window._out_path.setText(os.path.join(self.tmp, "clip2.mp4"))
+        self.window._out_dir.setText(self.tmp)
+        self.window._out_name.setText("clip2")
         self.window.start_export()
         self.window._exporter.cancel()
         # A cancelled export writes nothing, so the prompt must decline and the
@@ -432,6 +434,171 @@ class DeleteTargetsTheRightFile(unittest.TestCase):
         self.window._maybe_delete_source()
         self.assertIsNone(self.window._exported)
         self.assertTrue(os.path.exists(self.cut))
+
+
+@unittest.skipUnless(REAL_WINDOWS, "needs a real display")
+class OutputNaming(unittest.TestCase):
+    """Folder and name are separate, and the name is the user's to keep."""
+
+    @classmethod
+    def setUpClass(cls):
+        import shutil
+        import tempfile
+        from clipper import Clipper
+        from tests import fixtures
+        cls.tmp = tempfile.mkdtemp(prefix="clipper-name-")
+        cls.source = os.path.join(cls.tmp, "replay.mp4")
+        shutil.copy(fixtures.sample("allp"), cls.source)
+        cls.window = Clipper()
+        cls.window.show()
+        cls.window.load(cls.source)
+
+    @classmethod
+    def tearDownClass(cls):
+        import shutil
+        cls.window._close_source()
+        dispose(cls.window)
+        shutil.rmtree(cls.tmp, ignore_errors=True)
+
+    def setUp(self):
+        self.window.load(self.source)
+        self.window._fmt_box.setCurrentIndex(0)
+
+    def test_loading_suggests_a_folder_and_a_name(self):
+        self.assertEqual(self.window._out_dir.text(), self.tmp)
+        self.assertEqual(self.window._out_name.text(), "replay_clip")
+        self.assertEqual(self.window._out_ext.text(), ".mp4")
+
+    def test_the_two_fields_recombine_into_a_path(self):
+        self.window._out_dir.setText("/tmp/somewhere")
+        self.window._out_name.setText("trickshot")
+        self.assertEqual(self.window._output_path(), "/tmp/somewhere/trickshot.mp4")
+
+    def test_changing_format_keeps_the_name_and_swaps_the_extension(self):
+        self.window._out_name.setText("trickshot")
+        for index, ext in ((1, ".webm"), (2, ".gif"), (0, ".mp4")):
+            self.window._fmt_box.setCurrentIndex(index)
+            self.assertEqual(self.window._out_name.text(), "trickshot",
+                             "the format changed the user's chosen name")
+            self.assertEqual(self.window._out_ext.text(), ext)
+            self.assertTrue(self.window._output_path().endswith(f"trickshot{ext}"))
+
+    def test_an_extension_typed_into_the_name_is_not_doubled(self):
+        self.window._out_name.setText("clip.mp4")
+        self.assertTrue(self.window._output_path().endswith("clip.mp4"))
+        self.assertNotIn(".mp4.mp4", self.window._output_path())
+
+    def test_an_unrelated_dot_in_the_name_survives(self):
+        self.window._out_name.setText("round 2.5")
+        self.assertTrue(self.window._output_path().endswith("round 2.5.mp4"))
+
+    def test_an_empty_field_yields_no_path(self):
+        self.window._out_name.setText("")
+        self.assertEqual(self.window._output_path(), "")
+        self.window._out_name.setText("x")
+        self.window._out_dir.setText("")
+        self.assertEqual(self.window._output_path(), "")
+
+    def test_a_home_relative_folder_is_expanded(self):
+        self.window._out_dir.setText("~/Videos")
+        self.window._out_name.setText("clip")
+        self.assertTrue(self.window._output_path().startswith(os.path.expanduser("~")))
+        self.assertNotIn("~", self.window._output_path())
+
+    def finish_a_pretend_export(self, name="trickshot"):
+        """Drive the post-export path without waiting on a real encode."""
+        from clipper import Exported
+        self.window._out_name.setText(name)
+        output = self.window._output_path()
+        open(output, "w").close()
+        self.window._exported = Exported(source=self.source, output=output,
+                                         duration=6.0, kept=2.0)
+        self.window._on_export_finished(True, f"Saved {os.path.basename(output)}")
+        return output
+
+    def test_the_name_survives_a_render(self):
+        # Regenerating a name here would throw away a deliberate choice, and the
+        # user would have to retype it for every clip.
+        output = self.finish_a_pretend_export("trickshot")
+        self.assertEqual(self.window._out_name.text(), "trickshot")
+        self.assertEqual(self.window._out_dir.text(), self.tmp)
+        os.remove(output)
+
+    def test_the_folder_survives_a_render_too(self):
+        self.window._out_dir.setText(self.tmp)
+        output = self.finish_a_pretend_export("keepme")
+        self.assertEqual(self.window._out_dir.text(), self.tmp)
+        os.remove(output)
+
+    def test_a_finished_export_is_remembered_for_reveal(self):
+        output = self.finish_a_pretend_export("revealme")
+        self.assertEqual(self.window._last_output, output)
+        self.assertTrue(self.window._reveal_btn.isVisible())
+        os.remove(output)
+
+    def test_the_suggested_name_avoids_an_existing_file(self):
+        open(os.path.join(self.tmp, "replay_clip.mp4"), "w").close()
+        self.window.load(self.source)
+        self.assertEqual(self.window._out_name.text(), "replay_clip2")
+        os.remove(os.path.join(self.tmp, "replay_clip.mp4"))
+
+
+@unittest.skipUnless(REAL_WINDOWS, "needs a real display")
+class CloseFile(unittest.TestCase):
+    def setUp(self):
+        import shutil
+        import tempfile
+        from clipper import Clipper
+        from tests import fixtures
+        self.tmp = tempfile.mkdtemp(prefix="clipper-close-")
+        self.source = os.path.join(self.tmp, "clip.mp4")
+        shutil.copy(fixtures.sample("allp"), self.source)
+        self.window = Clipper()
+        self.window.show()
+        self.window.load(self.source)
+
+    def tearDown(self):
+        import shutil
+        dispose(self.window)
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def test_closing_returns_the_window_to_empty(self):
+        self.assertIsNotNone(self.window._info)
+        self.window.close_file()
+        self.assertIsNone(self.window._info)
+        self.assertEqual(self.window._title.text(), "No file loaded")
+        self.assertEqual(self.window._badge.text(), "")
+        self.assertEqual(self.window._out_name.text(), "")
+        self.assertEqual(self.window._out_dir.text(), "")
+
+    def test_closing_disables_everything_again(self):
+        self.window.close_file()
+        for widget in (self.window._export_btn, self.window._play_btn,
+                       self.window._fmt_box, self.window._delete_source,
+                       self.window._close_btn):
+            self.assertFalse(widget.isEnabled())
+
+    def test_closing_leaves_the_file_on_disk(self):
+        self.window.close_file()
+        self.assertTrue(os.path.exists(self.source), "Close must not delete anything")
+
+    def test_closing_clears_the_timeline(self):
+        self.window._timeline.set_in(1.0)
+        self.window._timeline.set_out(3.0)
+        self.window.close_file()
+        self.assertEqual(self.window._timeline._duration, 0.0)
+        self.assertEqual(self.window._timeline._thumbs, [])
+
+    def test_closing_with_nothing_open_is_harmless(self):
+        self.window.close_file()
+        self.window.close_file()
+        self.assertIsNone(self.window._info)
+
+    def test_a_file_can_be_opened_again_after_closing(self):
+        self.window.close_file()
+        self.window.load(self.source)
+        self.assertIsNotNone(self.window._info)
+        self.assertTrue(self.window._export_btn.isEnabled())
 
 
 @unittest.skipUnless(REAL_WINDOWS, "needs a real display")
