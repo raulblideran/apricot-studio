@@ -29,6 +29,13 @@ finish-args:
   # The delete-original option hands files to the desktop wastebasket, and
   # "Show in folder" opens the file manager, both over the session bus.
   - --talk-name=org.freedesktop.FileManager1
+  # The Trash portal is advertised on this desktop but no backend implements
+  # it, so gio's sandboxed trash fails outright. The app falls back to the
+  # freedesktop trash spec directly, which needs the real wastebasket -- not
+  # the app's private XDG_DATA_HOME, which Dolphin would never look in.
+  # Every location the app can reach is on the same filesystem as this, so the
+  # move stays a rename.
+  - --filesystem=~/.local/share/Trash:create
   # PyQt6 comes from a wheel, so Qt's own idea of where its plugins live points
   # into the (empty) PyQt6 package rather than at the runtime. Without the
   # runtime's plugin directory on the path there is no platform plugin and the

@@ -151,9 +151,11 @@ keeping. It never acts on its own:
   alone and says so.
 - The prompt names the file, its size, and **how much of it you are throwing
   away** — "your clip kept 14.0s, about 15%; the other 85% is only in this file".
-- **Move to Trash** is the default, and goes through `gio` so the file lands in
-  the desktop wastebasket on its own filesystem and stays recoverable from
-  Dolphin.
+- **Move to Trash** is the default. Outside a sandbox it goes through `gio`,
+  which picks the right wastebasket for the file's own disk. Inside the Flatpak
+  that routes via the Trash portal, which KDE advertises but does not implement,
+  so the app writes the trash entry itself instead — same result, still
+  restorable from Dolphin.
 - **Delete permanently** skips the Trash and asks a second time, on its own
   dialog, because nothing can undo it.
 - `Esc` always means keep.

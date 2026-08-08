@@ -8,6 +8,7 @@ need the whole window are skipped unless a display is actually present.
 
 from __future__ import annotations
 
+import errno
 import os
 import unittest
 
@@ -618,6 +619,133 @@ class AccentColour(unittest.TestCase):
         self.assertEqual(len(icons), len(self.theme.ACCENTS))
         for icon in icons:
             self.assertFalse(icon.isNull(), "a colour was offered without a preview")
+
+
+class TrashFallback(unittest.TestCase):
+    """The wastebasket path, written by hand.
+
+    Inside a flatpak, gio routes trashing through the Trash portal, which this
+    desktop advertises but does not implement -- so the safe option of a
+    destructive feature has to work without it. No display needed: this is
+    filesystem work, not widget work.
+    """
+
+    def setUp(self):
+        import tempfile
+        from apricot import ApricotStudio
+        self.app_cls = ApricotStudio
+        self.home = tempfile.mkdtemp(prefix="apricot-trash-")
+        self.trash = os.path.join(self.home, ".local", "share", "Trash")
+        self._real_expanduser = os.path.expanduser
+        os.path.expanduser = lambda p: (
+            p.replace("~", self.home, 1) if p.startswith("~") else self._real_expanduser(p))
+        self.addCleanup(self._restore)
+
+    def _restore(self):
+        import shutil
+        os.path.expanduser = self._real_expanduser
+        shutil.rmtree(self.home, ignore_errors=True)
+
+    def make_file(self, name="clip.mp4", size=4096):
+        path = os.path.join(self.home, name)
+        with open(path, "wb") as handle:
+            handle.write(b"\7" * size)
+        return path
+
+    def read_info(self, name):
+        with open(os.path.join(self.trash, "info", f"{name}.trashinfo")) as handle:
+            return handle.read()
+
+    def test_the_file_moves_into_the_wastebasket(self):
+        path = self.make_file()
+        ok, err = self.app_cls._trash_by_hand(path)
+        self.assertTrue(ok, err)
+        self.assertFalse(os.path.exists(path))
+        self.assertTrue(os.path.exists(os.path.join(self.trash, "files", "clip.mp4")))
+
+    def test_it_records_where_the_file_came_from(self):
+        # Without this the file manager cannot offer to restore it.
+        path = self.make_file()
+        self.app_cls._trash_by_hand(path)
+        info = self.read_info("clip.mp4")
+        self.assertIn("[Trash Info]", info)
+        self.assertIn(f"Path={path}", info)
+        self.assertRegex(info, r"DeletionDate=\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}")
+
+    def test_paths_needing_escaping_are_encoded(self):
+        path = self.make_file("holiday clip #2.mp4")
+        ok, _ = self.app_cls._trash_by_hand(path)
+        self.assertTrue(ok)
+        info = self.read_info("holiday clip #2.mp4")
+        self.assertIn("%20", info)
+        self.assertNotIn(" ", info.split("Path=")[1].split("\n")[0])
+
+    def test_contents_survive_intact(self):
+        path = self.make_file(size=200_000)
+        original = open(path, "rb").read()
+        self.app_cls._trash_by_hand(path)
+        with open(os.path.join(self.trash, "files", "clip.mp4"), "rb") as handle:
+            self.assertEqual(handle.read(), original)
+
+    def test_a_second_file_of_the_same_name_does_not_overwrite_the_first(self):
+        first = self.make_file()
+        self.app_cls._trash_by_hand(first)
+        second = self.make_file()
+        ok, err = self.app_cls._trash_by_hand(second)
+        self.assertTrue(ok, err)
+        trashed = sorted(os.listdir(os.path.join(self.trash, "files")))
+        self.assertEqual(len(trashed), 2, f"one overwrote the other: {trashed}")
+
+    def test_every_file_keeps_its_own_record(self):
+        for _ in range(3):
+            self.app_cls._trash_by_hand(self.make_file())
+        files = os.listdir(os.path.join(self.trash, "files"))
+        infos = os.listdir(os.path.join(self.trash, "info"))
+        self.assertEqual(len(files), len(infos))
+
+    def test_a_missing_file_fails_without_leaving_a_record(self):
+        ok, err = self.app_cls._trash_by_hand(os.path.join(self.home, "nope.mp4"))
+        self.assertFalse(ok)
+        self.assertTrue(err)
+        # A record with no file behind it shows as a broken entry in Dolphin.
+        self.assertFalse(os.listdir(os.path.join(self.trash, "info")))
+
+    def cross_device_rename(self):
+        """Make os.rename behave as it does across two bind mounts."""
+        import unittest.mock
+        return unittest.mock.patch(
+            "os.rename", side_effect=OSError(errno.EXDEV, "Invalid cross-device link"))
+
+    def test_it_still_works_when_rename_cannot_cross_mounts(self):
+        # The real sandbox case: flatpak bind-mounts each granted path
+        # separately, so rename() refuses even though one filesystem holds both.
+        # A same-directory test can never reach this branch, hence the patch.
+        path = self.make_file(size=50_000)
+        original = open(path, "rb").read()
+        with self.cross_device_rename():
+            ok, err = self.app_cls._trash_by_hand(path)
+        self.assertTrue(ok, f"cross-device trashing failed: {err}")
+        self.assertFalse(os.path.exists(path), "the original was left behind")
+        with open(os.path.join(self.trash, "files", "clip.mp4"), "rb") as handle:
+            self.assertEqual(handle.read(), original, "the copy is not intact")
+
+    def test_a_failed_cross_device_copy_leaves_nothing_behind(self):
+        import unittest.mock
+        path = self.make_file()
+        with self.cross_device_rename(), \
+             unittest.mock.patch("shutil.copy2", side_effect=OSError("disk full")):
+            ok, err = self.app_cls._trash_by_hand(path)
+        self.assertFalse(ok)
+        self.assertTrue(os.path.exists(path), "the original must survive a failure")
+        self.assertFalse(os.listdir(os.path.join(self.trash, "info")),
+                         "left an orphaned record")
+        self.assertFalse(os.listdir(os.path.join(self.trash, "files")),
+                         "left a partial copy")
+
+    def test_the_wastebasket_is_created_if_absent(self):
+        self.assertFalse(os.path.exists(self.trash))
+        self.app_cls._trash_by_hand(self.make_file())
+        self.assertTrue(os.path.isdir(os.path.join(self.trash, "files")))
 
 
 @unittest.skipUnless(REAL_WINDOWS, "needs a real display")

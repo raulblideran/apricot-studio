@@ -16,10 +16,14 @@ configure. Run with an optional file path:
 
 from __future__ import annotations
 
+import errno
 import os
+import shutil
 import subprocess
 import sys
 from dataclasses import dataclass
+from datetime import datetime
+from urllib.parse import quote
 
 from PyQt6.QtCore import QEvent, QSettings, Qt, QTimer, QUrl, pyqtSlot
 from PyQt6.QtGui import QColor, QDesktopServices, QIcon, QPainter, QPixmap
@@ -936,21 +940,90 @@ class ApricotStudio(QMainWindow):
         self._status.setText(f"{where} {os.path.basename(source)}  ·  "
                              f"clip saved as {os.path.basename(clip)}")
 
-    @staticmethod
-    def _move_to_trash(path: str) -> tuple[bool, str]:
-        """Hand the file to the desktop's wastebasket via gio.
+    @classmethod
+    def _move_to_trash(cls, path: str) -> tuple[bool, str]:
+        """Hand the file to the desktop's wastebasket.
 
-        gio picks the right .Trash-1000 for the file's own filesystem, which a
-        naive move into ~/.local/share/Trash would get wrong for external drives.
+        gio first: outside a sandbox it picks the right .Trash-1000 for the
+        file's own filesystem, which a naive move into ~/.local/share/Trash
+        would get wrong for external drives.
+
+        Inside a flatpak, gio routes through the Trash portal, which some
+        desktops advertise without implementing -- it fails, and the safe
+        option of a destructive feature must not depend on that. So fall back
+        to writing the trash entry directly.
         """
         try:
             result = subprocess.run(["gio", "trash", "--", path],
                                     capture_output=True, text=True, timeout=30)
+            if result.returncode == 0:
+                return True, ""
+            reason = result.stderr.strip() or "gio trash failed"
         except (OSError, subprocess.SubprocessError) as exc:
-            return False, f"Could not run gio: {exc}"
-        if result.returncode == 0:
-            return True, ""
-        return False, result.stderr.strip() or "gio trash failed"
+            reason = f"could not run gio: {exc}"
+
+        ok, fallback_error = cls._trash_by_hand(path)
+        return (True, "") if ok else (False, f"{reason}; {fallback_error}")
+
+    @staticmethod
+    def _trash_by_hand(path: str) -> tuple[bool, str]:
+        """The freedesktop trash spec, done directly.
+
+        Targets the home wastebasket, which is where every location this app
+        can reach ends up. Deliberately does not pre-check st_dev: inside a
+        sandbox each granted path is a separate bind mount, so two directories
+        on one filesystem report the same device yet still refuse rename().
+        Whether the move works is decided by attempting it.
+        """
+        trash = os.path.expanduser("~/.local/share/Trash")
+        files_dir, info_dir = os.path.join(trash, "files"), os.path.join(trash, "info")
+        try:
+            os.makedirs(files_dir, exist_ok=True)
+            os.makedirs(info_dir, exist_ok=True)
+        except OSError as exc:
+            return False, f"no wastebasket available ({exc})"
+
+        source = os.path.abspath(path)
+
+        # The spec wants the info file created first, and its name to be unique
+        # against both directories.
+        stem, ext = os.path.splitext(os.path.basename(source))
+        name, n = f"{stem}{ext}", 1
+        while True:
+            info_path = os.path.join(info_dir, f"{name}.trashinfo")
+            try:
+                handle = open(info_path, "x", encoding="utf-8")
+            except FileExistsError:
+                name, n = f"{stem}_{n}{ext}", n + 1
+                continue
+            except OSError as exc:
+                return False, str(exc)
+            break
+
+        with handle:
+            handle.write("[Trash Info]\n"
+                         f"Path={quote(source)}\n"
+                         f"DeletionDate={datetime.now().strftime('%Y-%m-%dT%H:%M:%S')}\n")
+        destination = os.path.join(files_dir, name)
+        try:
+            os.rename(source, destination)
+        except OSError as exc:
+            if exc.errno != errno.EXDEV:
+                os.remove(info_path)      # don't leave a record with no file
+                return False, str(exc)
+            # Different mount points, so rename cannot work. Copy then unlink,
+            # removing the source only once the copy is safely written.
+            try:
+                shutil.copy2(source, destination)
+                os.remove(source)
+            except OSError as copy_error:
+                for leftover in (destination, info_path):
+                    try:
+                        os.remove(leftover)
+                    except OSError:
+                        pass
+                return False, str(copy_error)
+        return True, ""
 
     @staticmethod
     def _delete_forever(path: str) -> tuple[bool, str]:
