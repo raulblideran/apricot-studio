@@ -35,6 +35,7 @@ from PyQt6.QtWidgets import (QApplication, QCheckBox, QComboBox, QFileDialog,
                              QSizePolicy, QVBoxLayout, QWidget)
 
 import export
+import sandbox
 import theme
 from media import (KeyframeLoader, MediaInfo, ThumbnailLoader, WaveformLoader,
                    fmt_tc, parse_tc, probe)
@@ -480,19 +481,57 @@ class ApricotStudio(QMainWindow):
         self._close_source()
         self._status.setText("")
 
-    def open_file(self) -> None:
-        start = os.path.dirname(self._info.path) if self._info else os.path.expanduser("~/Videos")
+    def open_file(self, start: str | None = None) -> None:
+        if start is None:
+            start = (os.path.dirname(self._info.path) if self._info
+                     else os.path.expanduser("~/Videos"))
         path, _ = QFileDialog.getOpenFileName(
             self, "Open video", start, f"Video files ({VIDEO_SUFFIXES});;All files (*)")
         if path:
             self.load(path)
+
+    def _report_open_failure(self, path: str, error: str) -> None:
+        """Say why a file would not open, and offer whatever can be done about it.
+
+        Only the sandbox case gets a dialog of its own. Everything else is
+        ffprobe telling the truth, and repeating it is the most useful thing
+        this can do.
+        """
+        trouble = sandbox.diagnose(path)
+        if trouble.kind != sandbox.BLOCKED:
+            QMessageBox.warning(self, "Cannot open", f"{os.path.basename(path)}\n\n{error}")
+            return
+
+        command = sandbox.override_command(trouble.folder)
+        text, detail = sandbox.explain(trouble)
+        box = QMessageBox(self)
+        box.setIcon(QMessageBox.Icon.Warning)
+        box.setWindowTitle("Cannot open")
+        box.setText(text)
+        box.setInformativeText(detail)
+        locate = box.addButton("Locate the file…", QMessageBox.ButtonRole.AcceptRole)
+        copy = box.addButton("Copy command", QMessageBox.ButtonRole.ActionRole)
+        close = box.addButton("Close", QMessageBox.ButtonRole.RejectRole)
+        box.setDefaultButton(locate)    # the one fix that works without leaving the app
+        box.setEscapeButton(close)
+        box.exec()
+
+        if box.clickedButton() is locate:
+            # The chooser is the portal's, which runs outside the sandbox, so it
+            # can reach the folder this app cannot -- and grants us the file.
+            self.open_file(trouble.folder)
+        elif box.clickedButton() is copy:
+            # A message box button always closes the box, so the command is in
+            # the text above as well: reading it is not worth a second dialog.
+            QApplication.clipboard().setText(command)
+            self._status.setText("Command copied. Run it, then restart Apricot Studio.")
 
     def load(self, path: str) -> None:
         path = os.path.abspath(os.path.expanduser(path))
         try:
             info = probe(path)
         except (RuntimeError, OSError, ValueError) as exc:
-            QMessageBox.warning(self, "Cannot open", f"{os.path.basename(path)}\n\n{exc}")
+            self._report_open_failure(path, str(exc))
             return
 
         self._info = info
@@ -566,7 +605,12 @@ class ApricotStudio(QMainWindow):
     def _suggest_output(self, source: str) -> None:
         """Fill in a destination that will not collide with anything."""
         ext = self._options().ext_for(self._info) if self._info else "mp4"
-        suggestion = export.default_output(source, ext)
+        # Next to the source is the useful answer, but a file located through
+        # the portal sits in a one-file directory nothing can be written into.
+        # Pick the folder before naming the clip, so the collision check below
+        # runs against the folder the clip will actually land in.
+        beside = os.path.join(sandbox.output_dir_for(source), os.path.basename(source))
+        suggestion = export.default_output(beside, ext)
         self._out_dir.setText(os.path.dirname(suggestion))
         self._out_name.setText(os.path.splitext(os.path.basename(suggestion))[0])
         self._out_ext.setText(f".{ext}")
@@ -1178,7 +1222,12 @@ def main() -> int:
                       else QIcon.fromTheme("multimedia-video-player"))
 
     path = next((a for a in sys.argv[1:] if not a.startswith("-")), None)
-    if path and not os.path.exists(os.path.expanduser(path)):
+    if path and sandbox.diagnose(os.path.expanduser(path)).kind == sandbox.MISSING:
+        # A file that is genuinely not there is a typo, and a terminal wants an
+        # exit code rather than a window. A file the sandbox is hiding is the
+        # opposite: "Open With" from the file manager comes through here, and
+        # exiting silently looks like the app failed to start, so let the window
+        # open and explain itself.
         print(f"apricot-studio: no such file: {path}", file=sys.stderr)
         return 1
 

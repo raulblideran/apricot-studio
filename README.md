@@ -190,6 +190,45 @@ keeping. It never acts on its own:
 Afterwards the file is closed, dropped from Recent, and the window returns to
 its empty state — it will not sit there showing a file that no longer exists.
 
+## Folders the Flatpak cannot see
+
+The Flatpak is allowed into **Videos**, **Pictures** and **Downloads**, and
+nowhere else. A file kept anywhere else — a second drive under `/var/mnt`, say —
+is not merely off limits: it is not mounted inside the sandbox at all, so
+`ffprobe` reports it as *"No such file or directory"*, word for word what it
+says about a file that was deleted. That message sent at least one person
+looking for a file that was sitting exactly where they left it.
+
+So the app checks before repeating it. If the folder itself is invisible and
+this is a Flatpak, the file is almost certainly there and the sandbox is the
+problem, and you get a dialog that says so and offers both ways out:
+
+- **Locate the file…** reopens the chooser at that folder. The chooser belongs
+  to the desktop portal and runs outside the sandbox, so it can reach what the
+  app cannot, and picking the file hands it over. Nothing to restart, but it
+  grants that one file — the clip is then written to `~/Videos`, because the
+  portal exposes the source in a directory that holds nothing else.
+- **Copy command** puts the exact line on your clipboard:
+
+  ```sh
+  flatpak override --user --filesystem=/var/mnt/PersonalFiles/Videos \
+      io.github.raulblideran.ApricotStudio
+  ```
+
+  Run it and start the app again. [Flatseal] does the same thing with a
+  checkbox. Either way it is permanent, and exports can then go next to the
+  source as usual.
+
+The app cannot grant this itself. Nothing in the portal API allows it, and the
+one thing that would — `--talk-name=org.freedesktop.Flatpak` — lets an app run
+arbitrary commands on the host, which is far too much to ask for a convenience.
+Handing over the right command is as close as this can honestly get.
+
+A file that really is missing, or one `ffprobe` simply refuses, still gets the
+plain message it always did.
+
+[Flatseal]: https://flathub.org/apps/com.github.tchx84.Flatseal
+
 ## Accent colour
 
 The swatch in the top-right opens eleven accents, each shown as a colour rather
@@ -249,6 +288,7 @@ since AV1 in software is far too slow at 4K.
 | `apricot.py` | window, player, keyboard |
 | `media.py` | ffprobe, keyframes, waveform, filmstrip |
 | `export.py` | builds and runs the ffmpeg cut |
+| `sandbox.py` | what the Flatpak can reach, and what to say when it cannot |
 | `timeline.py` | the timeline widget |
 | `theme.py` | accent palette and the stylesheet built from it |
 | `tests/` | the test suite |
@@ -256,7 +296,7 @@ since AV1 in software is far too slow at 4K.
 ## Tests
 
 ```sh
-./run-tests.sh           # 271 tests, ~27s (real encodes)
+./run-tests.sh           # 315 tests, ~28s (real encodes)
 ./run-tests.sh --fast    # ~4s, skips anything that invokes ffmpeg
 ./run-tests.sh -v        # one line per test
 ```
@@ -273,7 +313,8 @@ it this project's only dependency.
 | `test_edges.py` | malformed input, hostile filenames, degenerate ranges, unreadable sources |
 | `test_encode.py` | real exports: bit-identity, durations, A/V sync, GOP structure, formats |
 | `test_theme.py` | palette contrast, distinctness, and the derived stylesheet |
-| `test_gui.py` | timeline geometry, zoom, snapping, painting, focus, accent, delete targeting |
+| `test_sandbox.py` | telling a hidden folder from a missing file, and the command offered for it |
+| `test_gui.py` | timeline geometry, zoom, snapping, painting, focus, accent, delete targeting, the blocked-folder dialog |
 
 Fixtures are synthesised with ffmpeg into `/tmp` — the suite never reads your
 video library. The `allp` fixture deliberately mirrors a gpu-screen-recorder
@@ -298,6 +339,9 @@ is reverted:
 | size-target bitrate left unbounded | caught |
 | output losing its extension | caught |
 | delete prompt following the open file | caught |
+| a hidden folder reported as a missing file | caught |
+| the override command left unquoted | caught |
+| exporting into the portal's one-file directory | caught |
 
 Two of these were originally *missed* by tests that only looked like they
 covered the behaviour — one asserted a value was recorded without checking

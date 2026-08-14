@@ -11,10 +11,11 @@ from __future__ import annotations
 import errno
 import os
 import unittest
+import unittest.mock       # 3.14 no longer pulls this in with unittest itself
 
 from PyQt6.QtCore import QPoint, Qt
 from PyQt6.QtGui import QImage
-from PyQt6.QtWidgets import QApplication, QLineEdit
+from PyQt6.QtWidgets import QApplication, QLineEdit, QMessageBox
 
 import timeline as timeline_mod
 from timeline import Timeline
@@ -831,6 +832,160 @@ class EmptyWindow(unittest.TestCase):
 
     def test_no_badge_without_a_file(self):
         self.assertEqual(self.window._badge.text(), "")
+
+
+@unittest.skipUnless(REAL_WINDOWS, "needs a real display")
+class OpeningWhatTheSandboxHides(unittest.TestCase):
+    """A file the flatpak was never allowed to see.
+
+    ffprobe reports it in exactly the words it uses for a deleted file, so the
+    window has to tell the two apart itself and offer the way out. The dialog is
+    modal, so exec() is replaced throughout: either it does nothing, or it
+    presses one button, which is as close to a user as this can get without a
+    hand on the mouse.
+    """
+
+    def setUp(self):
+        import shutil
+        import tempfile
+        from apricot import ApricotStudio
+        self.tmp = tempfile.mkdtemp(prefix="apricot-blocked-")
+        self.addCleanup(shutil.rmtree, self.tmp, ignore_errors=True)
+        # Not mounted in here, so nothing along it exists -- what an ungranted
+        # folder looks like from inside the sandbox.
+        self.folder = os.path.join(self.tmp, "PersonalFiles", "Videos")
+        self.blocked = os.path.join(self.folder, "MOE_2489_1.mp4")
+        self.window = ApricotStudio()
+        self.window.show()
+        self.addCleanup(dispose, self.window)
+
+    def confined(self):
+        """Pretend this process is the flatpak, whatever it really is."""
+        import sandbox
+        return unittest.mock.patch.object(sandbox, "is_sandboxed", return_value=True)
+
+    def silent_dialog(self):
+        return unittest.mock.patch.object(QMessageBox, "exec", return_value=0)
+
+    def press(self, label):
+        """Replace exec() with a press of the button carrying `label`.
+
+        The dialog is parented to the window, so it can be found there while
+        exec() stands in for the user.
+        """
+        def clicked(*_):
+            boxes = self.window.findChildren(QMessageBox)
+            self.assertTrue(boxes, "no dialog was put up")
+            for button in boxes[-1].buttons():
+                if button.text().replace("&", "") == label:
+                    button.click()
+                    return 0
+            raise AssertionError(f"no “{label}” button in the dialog")
+
+        return unittest.mock.patch.object(QMessageBox, "exec", side_effect=clicked)
+
+    def test_a_failed_open_is_reported_and_changes_nothing_else(self):
+        with unittest.mock.patch.object(
+                type(self.window), "_report_open_failure") as report:
+            self.window.load(self.blocked)
+        report.assert_called_once()
+        self.assertEqual(report.call_args.args[0], self.blocked)
+        self.assertIsNone(self.window._info, "nothing was opened")
+        self.assertNotIn(self.blocked, self.window._settings.value("recent", [], type=list) or [],
+                         "a file that would not open must not join the recent list")
+
+    def test_a_hidden_folder_gets_the_dialog_that_can_fix_it(self):
+        with self.confined(), self.silent_dialog() as box, \
+                unittest.mock.patch.object(QMessageBox, "warning") as plain:
+            self.window._report_open_failure(self.blocked, "No such file or directory")
+        box.assert_called_once()
+        plain.assert_not_called()
+
+    def test_an_ordinary_failure_keeps_the_plain_message(self):
+        # The file is right there; ffprobe simply does not want it. Nothing a
+        # permission would change, so the old wording stands.
+        real = os.path.join(self.tmp, "not-really-video.mp4")
+        with open(real, "wb") as handle:
+            handle.write(b"junk")
+        with self.confined(), self.silent_dialog() as box, \
+                unittest.mock.patch.object(QMessageBox, "warning") as plain:
+            self.window._report_open_failure(real, "Invalid data found when processing input")
+        plain.assert_called_once()
+        box.assert_not_called()
+        self.assertIn("Invalid data found", plain.call_args.args[2])
+
+    def test_a_genuinely_missing_file_keeps_the_plain_message(self):
+        gone = os.path.join(self.tmp, "deleted.mp4")
+        with self.confined(), self.silent_dialog() as box, \
+                unittest.mock.patch.object(QMessageBox, "warning") as plain:
+            self.window._report_open_failure(gone, "No such file or directory")
+        plain.assert_called_once()
+        box.assert_not_called()
+
+    def test_copying_the_command_puts_a_working_line_on_the_clipboard(self):
+        import sandbox
+        # QMessageBox.warning builds and runs its own box down in C++, where a
+        # patched exec() cannot reach it. Stubbing it keeps a regression here a
+        # failure rather than a real modal dialog nobody is around to dismiss.
+        with self.confined(), self.press("Copy command"), \
+                unittest.mock.patch.object(QMessageBox, "warning") as plain:
+            self.window._report_open_failure(self.blocked, "No such file or directory")
+        plain.assert_not_called()
+        copied = _app.clipboard().text()
+        self.assertEqual(copied, sandbox.override_command(self.folder))
+        self.assertIn(self.folder, copied)
+        self.assertIn("restart", self.window._status.text().lower(),
+                      "an override does nothing until the app is started again")
+
+    def test_locating_the_file_opens_the_chooser_at_the_blocked_folder(self):
+        # The chooser is the portal's, which is not confined, so it can reach
+        # the folder this app cannot -- but only if it starts there.
+        with self.confined(), self.press("Locate the file…"), \
+                unittest.mock.patch.object(QMessageBox, "warning") as plain, \
+                unittest.mock.patch.object(type(self.window), "open_file") as chooser:
+            self.window._report_open_failure(self.blocked, "No such file or directory")
+        plain.assert_not_called()
+        chooser.assert_called_once_with(self.folder)
+
+    def test_closing_the_dialog_does_nothing_at_all(self):
+        with self.confined(), self.press("Close"), \
+                unittest.mock.patch.object(QMessageBox, "warning") as plain, \
+                unittest.mock.patch.object(type(self.window), "open_file") as chooser:
+            self.window._report_open_failure(self.blocked, "No such file or directory")
+        plain.assert_not_called()
+        chooser.assert_not_called()
+
+
+@unittest.skipUnless(REAL_WINDOWS, "needs a real display")
+class WhereTheClipIsSuggested(unittest.TestCase):
+    """The export folder the window fills in for a freshly opened source."""
+
+    def setUp(self):
+        import shutil
+        import tempfile
+        from apricot import ApricotStudio
+        self.tmp = tempfile.mkdtemp(prefix="apricot-suggest-")
+        self.addCleanup(shutil.rmtree, self.tmp, ignore_errors=True)
+        self.window = ApricotStudio()
+        self.addCleanup(dispose, self.window)
+
+    def test_an_ordinary_source_exports_beside_itself(self):
+        self.window._suggest_output(os.path.join(self.tmp, "clip.mp4"))
+        self.assertEqual(self.window._out_dir.text(), self.tmp)
+        self.assertEqual(self.window._out_name.text(), "clip_clip")
+
+    def test_a_portal_path_exports_somewhere_a_file_can_be_written(self):
+        # A file located through the portal is exposed in a one-file directory
+        # that will not take a second one, so the source's folder is no answer.
+        import sandbox
+        doc = os.path.join(self.tmp, "doc", "a1b2c3d4")
+        os.makedirs(doc)
+        with unittest.mock.patch.dict(os.environ, {"XDG_RUNTIME_DIR": self.tmp}):
+            self.window._suggest_output(os.path.join(doc, "MOE_2489_1.mp4"))
+            self.assertEqual(self.window._out_dir.text(), sandbox.fallback_output_dir())
+        # A name already taken there gets a number, so only the stem is fixed.
+        self.assertTrue(self.window._out_name.text().startswith("MOE_2489_1_clip"),
+                        self.window._out_name.text())
 
 
 if __name__ == "__main__":

@@ -144,6 +144,7 @@ modules:
       - install -Dm644 apricot.py -t /app/share/apricot-studio/
       - install -Dm644 media.py -t /app/share/apricot-studio/
       - install -Dm644 export.py -t /app/share/apricot-studio/
+      - install -Dm644 sandbox.py -t /app/share/apricot-studio/
       - install -Dm644 timeline.py -t /app/share/apricot-studio/
       - install -Dm644 theme.py -t /app/share/apricot-studio/
       - install -Dm755 flatpak/apricot-studio -t /app/bin/
