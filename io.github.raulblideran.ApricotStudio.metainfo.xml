@@ -75,6 +75,20 @@
   <content_rating type="oars-1.1"/>
 
   <releases>
+    <release version="1.1.0" date="2026-08-15">
+      <description>
+        <p>
+          A video kept outside Videos, Pictures or Downloads used to be reported
+          as missing, because a sandboxed app cannot see it at all. Apricot
+          Studio now recognises that and says so.
+        </p>
+        <ul>
+          <li>Locate the file to open it once, or copy the command that allows its folder for good</li>
+          <li>Opening such a file from the file manager starts the app and explains, rather than appearing to fail</li>
+          <li>Clips are written to Videos when the source folder cannot take them</li>
+        </ul>
+      </description>
+    </release>
     <release version="1.0.0" date="2026-08-08">
       <description>
         <p>First release.</p>
