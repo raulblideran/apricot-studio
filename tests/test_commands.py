@@ -182,6 +182,22 @@ class Formats(unittest.TestCase):
         self.assertIn("paletteuse", chain)
         self.assertIn("-an", plan.args)
 
+    def test_gif_seeks_the_input_rather_than_the_output(self):
+        """Regression: the palette graph used to be fed the rest of the file.
+
+        palettegen emits nothing until end of stream and paletteuse buffers
+        every frame waiting for it, so an output-side trim means the whole file
+        past the seek is decoded and held in memory -- and the palette comes out
+        of footage the clip does not contain.
+        """
+        plan = export.build(make_info(), 45.0, 48.0, "/tmp/o.gif", KF,
+                            export.Options(fmt=export.GIF))
+        self.assertEqual(plan.args.count("-ss"), 1, "one seek, on the input")
+        self.assertLess(index_of(plan.args, "-ss"), index_of(plan.args, "-i"))
+        self.assertLess(index_of(plan.args, "-t"), index_of(plan.args, "-i"))
+        self.assertEqual(float(value_after(plan.args, "-ss")), 45.0,
+                         "the input seek must cover the whole distance")
+
     def test_gif_does_not_fight_the_filter_chain(self):
         plan = export.build(make_info(), 45.0, 48.0, "/tmp/o.gif", KF,
                             export.Options(fmt=export.GIF))
@@ -214,6 +230,69 @@ class Formats(unittest.TestCase):
         self.assertNotIn("-movflags",
                          export.build(make_info(), 45.0, 48.0, "/tmp/o.webm", KF,
                                       export.Options(fmt=export.WEBM)).args)
+
+
+class WebMRateControl(unittest.TestCase):
+    """Regression: WebM ignored both the quality preset and the size target.
+
+    The WebM branch returned before rate control was ever consulted, so every
+    WebM export was `-crf 32` whatever the user picked -- while the badge above
+    the button read "fitting 10 MB" and the estimate agreed with it.
+    """
+
+    def webm(self, **over):
+        return export.build(make_info(), 45.0, 55.0, "/tmp/o.webm", KF,
+                            export.Options(fmt=export.WEBM, **over)).args
+
+    def test_a_size_target_sets_a_bitrate(self):
+        args = self.webm(target_bytes=10_000_000)
+        self.assertIsNotNone(value_after(args, "-b:v"))
+        self.assertGreater(int(value_after(args, "-b:v")), 0)
+        self.assertIsNotNone(value_after(args, "-maxrate"))
+
+    def test_a_size_target_drops_constant_quality(self):
+        # libvpx reads a CRF next to `-b:v 0` as "ignore the bitrate", so the
+        # two cannot both be present or the target means nothing.
+        self.assertNotIn("-crf", self.webm(target_bytes=10_000_000))
+
+    def test_the_target_ceiling_fits_the_budget(self):
+        args = self.webm(target_bytes=10_000_000)
+        audio = sum(t.bitrate or 128_000 for t in make_info().audio)
+        worst = (int(value_after(args, "-maxrate")) + audio) * 10.0 / 8
+        self.assertLessEqual(worst, 10_000_000)
+
+    def test_each_preset_lowers_the_quality(self):
+        crfs = [int(value_after(self.webm(quality=q), "-crf"))
+                for q in (export.SOURCE_QUALITY, export.SMALLER, export.SMALLEST)]
+        self.assertEqual(crfs, sorted(crfs))
+        self.assertEqual(len(set(crfs)), 3, "every preset produced the same file")
+
+    def test_a_preset_stays_in_constant_quality_mode(self):
+        self.assertEqual(value_after(self.webm(quality=export.SMALLER), "-b:v"), "0")
+
+
+class SizeTargetKeepsTheCodec(unittest.TestCase):
+    """Regression: a size target sent every non-HEVC source to libx264.
+
+    For a VP9 source that is not a silent codec swap but a broken command --
+    H.264 into the .webm the source arrived in, which no muxer accepts.
+    """
+
+    def label(self, codec, **over):
+        return export.encoder_label(make_info(v_codec=codec), export.Options(**over))
+
+    def test_the_encoder_is_the_same_with_and_without_a_target(self):
+        for codec in ("h264", "hevc", "vp9", "av1"):
+            with self.subTest(codec=codec):
+                self.assertEqual(self.label(codec, target_bytes=10_000_000),
+                                 self.label(codec))
+
+    def test_a_vp9_source_stays_vp9(self):
+        plan = export.build(make_info(v_codec="vp9", ext="webm"), 45.0, 55.0,
+                            "/tmp/o.webm", KF,
+                            export.Options(target_bytes=10_000_000))
+        self.assertIn("libvpx-vp9", plan.args)
+        self.assertNotIn("libx264", plan.args)
 
 
 class SizeTargetCeiling(unittest.TestCase):
@@ -389,6 +468,15 @@ class SizeEstimates(unittest.TestCase):
 
     def test_muting_audio_lowers_the_estimate(self):
         self.assertLess(self.estimate(audio=export.NO_AUDIO), self.estimate())
+
+    def test_the_webm_estimate_tracks_the_preset_too(self):
+        # It used to return the same number for every preset, because the WebM
+        # branch replaced the preset share rather than multiplying by it.
+        sizes = [export.estimate_bytes(make_info(),
+                                       export.Options(fmt=export.WEBM, quality=q), 10.0)
+                 for q in (export.SOURCE_QUALITY, export.SMALLER, export.SMALLEST)]
+        self.assertEqual(sizes, sorted(sizes, reverse=True))
+        self.assertEqual(len(set(sizes)), 3)
 
     def test_gif_declines_to_guess(self):
         # Palette output does not follow from a bitrate, so no number is better

@@ -30,7 +30,14 @@ VAAPI_DEVICE = "/dev/dri/renderD128"
 # Measured on a 1440p60 replay (source 9.51 Mb/s): this lands at 9.58 Mb/s,
 # 1.00x the source, at 37.5 dB PSNR against it. Dropping to CRF 24 saves nothing
 # on size (both hit the cap) and costs 1.8 dB, which is why the floor is 20.
-CRF = {"h264": 20, "hevc": 22}
+CRF = {"h264": 20, "hevc": 22, "vp9": 30, "av1": 30}
+
+# VA-API takes a quantiser rather than a CRF, on its own scale.
+AV1_QP = 28
+
+# Converting to WebM is a deliberate change of format rather than a match to the
+# source, so it starts from its own baseline instead of the source codec's.
+WEBM_CRF = 32
 
 # Quality presets. Each pairs a CRF offset with a ceiling expressed as a share of
 # the source's own bitrate, so "smaller" means smaller *than this file* rather
@@ -190,10 +197,12 @@ def estimate_bytes(info: MediaInfo, options: Options, duration: float) -> int:
         return int(options.target_bytes * SIZE_MARGIN)
 
     audio_bps = _selected_audio_bitrate(info, options)
+    video_bps = info.v_bitrate * QUALITY_RATE.get(options.quality, 1.0)
     if options.fmt == WEBM:
-        video_bps = info.v_bitrate * WEBM_RATE_FACTOR
-    else:
-        video_bps = info.v_bitrate * QUALITY_RATE.get(options.quality, 1.0)
+        # VP9 at these settings lands well under an equivalent H.264 bitrate,
+        # and the preset still applies on top -- it moves the CRF, so a smaller
+        # preset really does produce a smaller WebM.
+        video_bps *= WEBM_RATE_FACTOR
     return int((video_bps + audio_bps) * duration / 8)
 
 
@@ -207,6 +216,44 @@ def _gop_size(info: MediaInfo, keyframes: list[float]) -> int:
     return max(1, round(2.0 * info.fps))
 
 
+def _abr_args(rate: int) -> list[str]:
+    """Average bitrate with a hard ceiling, for a size-targeted encode.
+
+    The cap is what decides whether the file fits: single-pass ABR overshoots on
+    hard content and sits at -maxrate, and a buffer no larger than one second of
+    the rate stops it banking that overshoot across the clip.
+    """
+    return ["-b:v", str(rate), "-maxrate", str(int(rate * 1.05)), "-bufsize", str(rate)]
+
+
+def _vp9_args(rate: list[str], cpu_used: str) -> list[str]:
+    """VP9 in software -- no GPU here encodes it, so it is genuinely slow.
+
+    Deliberately no VBV ceiling in the quality case: libvpx reads -maxrate
+    alongside `-b:v 0` as nothing at all, so a cap there would be decoration.
+    """
+    return ["-c:v", "libvpx-vp9", *rate, "-row-mt", "1",
+            "-deadline", "good", "-cpu-used", cpu_used]
+
+
+def _av1_args(info: MediaInfo, abr: list[str],
+              offset: int) -> tuple[list[str], list[str], str]:
+    """AV1 stays AV1, on the GPU when there is one.
+
+    AV1 in software is far too slow for the 4K sources that tend to arrive in
+    this codec; this GPU encodes it natively, and it is what the machine's own
+    convert script already uses.
+    """
+    if os.path.exists(VAAPI_DEVICE):
+        surface = "p010" if "10" in info.pix_fmt else "nv12"
+        return (["-vaapi_device", VAAPI_DEVICE],
+                ["-vf", f"format={surface},hwupload", "-c:v", "av1_vaapi",
+                 *(abr or ["-qp", str(AV1_QP + offset)])],
+                "av1_vaapi")
+    return [], ["-c:v", "libsvtav1", "-preset", "8",
+                *(abr or ["-crf", str(CRF["av1"] + offset)])], "libsvtav1"
+
+
 def _video_args(info: MediaInfo, options: Options = Options(),
                 duration: float = 0.0) -> tuple[list[str], list[str], str]:
     """Returns (args before -i, args after -i, human label)."""
@@ -218,37 +265,30 @@ def _video_args(info: MediaInfo, options: Options = Options(),
                  f"[b][p]paletteuse=dither=bayer:bayer_scale=5:diff_mode=rectangle")
         return [], ["-filter_complex", chain, "-loop", "0"], "gif"
 
+    # Two ways to drive the encoder, and every codec below picks one of them. A
+    # size target solves an average bitrate from the budget; otherwise quality
+    # leads, capped by a ceiling expressed as a share of the source's own
+    # bitrate so that a preset means the same thing whatever the file is.
+    target = options.target_bytes
+    abr = _abr_args(target_video_bitrate(info, options, duration)) if target else []
+    offset = QUALITY_CRF.get(options.quality, 0)
+    ceiling = int(info.v_bitrate * QUALITY_RATE.get(options.quality, 1.0))
+    vbv = ["-maxrate", str(ceiling), "-bufsize", str(ceiling)] if ceiling else []
+
     if options.fmt == WEBM:
-        # No GPU here encodes VP9, so this is software and genuinely slow.
-        return [], ["-c:v", "libvpx-vp9", "-crf", "32", "-b:v", "0", "-row-mt", "1",
-                    "-deadline", "good", "-cpu-used", "4"], "libvpx-vp9"
+        # Under a target, -crf must be absent rather than sit alongside the
+        # bitrate: libvpx reads a CRF next to `-b:v 0` as "constant quality,
+        # ignore the bitrate", which is how a size target asked for here used to
+        # be discarded without a word.
+        return [], _vp9_args(
+            abr or ["-crf", str(WEBM_CRF + offset), "-b:v", "0"], "4"), "libvpx-vp9"
 
     codec = info.v_codec
 
-    if options.target_bytes:
-        # A size target replaces quality-driven rate control with an average
-        # bitrate solved from the budget.
-        rate = target_video_bitrate(info, options, duration)
-        rate_args = ["-b:v", str(rate), "-maxrate", str(int(rate * 1.05)),
-                     "-bufsize", str(rate)]
-        if codec == "hevc":
-            return [], ["-c:v", "libx265", "-preset", PRESET["hevc"], "-x265-params",
-                        f"log-level=error:bframes={info.has_b_frames}",
-                        *rate_args], "libx265"
-        return [], ["-c:v", "libx264", "-preset", PRESET["h264"],
-                    "-bf", str(info.has_b_frames), *rate_args], "libx264"
-
-    # A ceiling expressed as a share of the source's own bitrate, so a preset
-    # means the same thing whatever the file is, plus one second of VBV.
-    share = QUALITY_RATE.get(options.quality, 1.0)
-    ceiling = int(info.v_bitrate * share)
-    vbv = ["-maxrate", str(ceiling), "-bufsize", str(ceiling)] if ceiling else []
-    offset = QUALITY_CRF.get(options.quality, 0)
-
     if codec == "h264":
         args = ["-c:v", "libx264", "-preset", PRESET["h264"],
-                "-crf", str(CRF["h264"] + offset),
-                "-bf", str(info.has_b_frames), *vbv]
+                "-bf", str(info.has_b_frames),
+                *(abr or ["-crf", str(CRF["h264"] + offset), *vbv])]
         if info.encoder_profile:
             args += ["-profile:v", info.encoder_profile]
         return [], args, "libx264"
@@ -258,30 +298,27 @@ def _video_args(info: MediaInfo, options: Options = Options(),
         # points above x264's for equivalent quality. It takes its B-frame count
         # through x265-params rather than -bf.
         args = ["-c:v", "libx265", "-preset", PRESET["hevc"],
-                "-crf", str(CRF["hevc"] + offset),
-                "-x265-params", f"log-level=error:bframes={info.has_b_frames}", *vbv]
+                "-x265-params", f"log-level=error:bframes={info.has_b_frames}",
+                *(abr or ["-crf", str(CRF["hevc"] + offset), *vbv])]
         if info.encoder_profile:
             args += ["-profile:v", info.encoder_profile]
         return [], args, "libx265"
 
+    # These two used to fall through to libx264 whenever a size target was set,
+    # which put H.264 inside whatever container the source arrived in -- for a
+    # VP9 .webm that is not a silent codec swap but a muxer refusing the file,
+    # so the export failed outright.
     if codec == "vp9":
-        return [], ["-c:v", "libvpx-vp9", "-crf", "30", "-b:v", "0",
-                    "-row-mt", "1", "-deadline", "good", "-cpu-used", "2"], "libvpx-vp9"
+        return [], _vp9_args(
+            abr or ["-crf", str(CRF["vp9"] + offset), "-b:v", "0"], "2"), "libvpx-vp9"
 
     if codec == "av1":
-        # AV1 in software is far too slow for 4K sources; this GPU encodes it
-        # natively, and it is what the machine's own convert script already uses.
-        if os.path.exists(VAAPI_DEVICE):
-            surface = "p010" if "10" in info.pix_fmt else "nv12"
-            return (["-vaapi_device", VAAPI_DEVICE],
-                    ["-vf", f"format={surface},hwupload", "-c:v", "av1_vaapi", "-qp", "28"],
-                    "av1_vaapi")
-        return [], ["-c:v", "libsvtav1", "-preset", "8", "-crf", "30"], "libsvtav1"
+        return _av1_args(info, abr, offset)
 
     # Unknown codec: fall back to H.264, which every player handles.
     return [], ["-c:v", "libx264", "-preset", PRESET["h264"],
-                "-crf", str(CRF["h264"] + offset),
-                "-bf", str(info.has_b_frames), *vbv], "libx264"
+                "-bf", str(info.has_b_frames),
+                *(abr or ["-crf", str(CRF["h264"] + offset), *vbv])], "libx264"
 
 
 def encoder_label(info: MediaInfo, options: Options = Options()) -> str:
@@ -292,6 +329,10 @@ def encoder_label(info: MediaInfo, options: Options = Options()) -> str:
 def _build_lossless(info: MediaInfo, start: float, duration: float, output: str,
                     options: Options) -> Plan:
     """A pure stream copy. Only valid when the cut starts on a keyframe."""
+    # The same floor the re-encode path applies. Without it a reversed or
+    # zero-length range reaches ffmpeg as a negative -t, and Plan.duration goes
+    # negative with it -- which is then the divisor for the progress fraction.
+    duration = max(duration, info.frame_duration)
     args = ["-hide_banner", "-nostdin", "-y",
             # Safe to seek the whole way on the input here: the start is a
             # keyframe, so there is no partial GOP for audio to disagree about.
@@ -324,17 +365,28 @@ def build(info: MediaInfo, start: float, end: float, output: str,
     gop = _gop_size(info, keyframes or [])
     pre, video, label = _video_args(info, options, duration)
 
-    # Split the seek: cheap keyframe seek on the input, exact seek on the output.
-    # The output-side seek trims every stream to the same instant, which is what
-    # keeps copied audio lined up with the re-encoded video.
-    coarse = max(0.0, start - SEEK_MARGIN)
-    fine = start - coarse
-
     args = ["-hide_banner", "-nostdin", "-y", *pre]
-    if coarse > 0:
-        args += ["-ss", f"{coarse:.6f}"]
-    args += ["-i", info.path, "-ss", f"{fine:.6f}", "-t", f"{duration:.6f}"]
-    if options.fmt != GIF:
+    if options.fmt == GIF:
+        # GIF seeks entirely on the input, and must. palettegen holds its
+        # palette back until end of stream, and paletteuse buffers every frame
+        # waiting for it, so whatever the graph is fed is decoded and kept in
+        # memory. An output-side seek trims *after* the filters, which would
+        # feed it everything from the seek to the end of the file: measured on a
+        # 60s source, cutting 2s took 1.56s and 300 MB against 0.37s and 121 MB,
+        # and the palette came out built from footage the clip does not contain.
+        # Seeking the input the whole way is safe here for the reason it is not
+        # elsewhere -- a GIF carries no audio, so no stream copy has to stay
+        # aligned with the video.
+        args += ["-ss", f"{start:.6f}", "-t", f"{duration:.6f}", "-i", info.path]
+    else:
+        # Split the seek: cheap keyframe seek on the input, exact seek on the
+        # output. The output-side seek trims every stream to the same instant,
+        # which is what keeps copied audio lined up with the re-encoded video.
+        coarse = max(0.0, start - SEEK_MARGIN)
+        if coarse > 0:
+            args += ["-ss", f"{coarse:.6f}"]
+        args += ["-i", info.path, "-ss", f"{start - coarse:.6f}",
+                 "-t", f"{duration:.6f}"]
         # filter_complex does its own stream selection, so -map would clash.
         args += ["-map", "0:v:0", *_audio_maps(info, options)]
 
@@ -393,6 +445,7 @@ class Exporter(QObject):
         self._plan: Plan | None = None
         self._stderr = ""
         self._cancelled = False
+        self._created_output = False
 
     @property
     def running(self) -> bool:
@@ -404,6 +457,12 @@ class Exporter(QObject):
         self._plan = plan
         self._stderr = ""
         self._cancelled = False
+        # Whether a broken output may be cleared away later. ffmpeg opens the
+        # destination with -y, so a file that was already there is lost the
+        # moment the encode starts -- but if ffmpeg failed before reaching it,
+        # that file is still whole, and removing it would destroy something this
+        # export never touched.
+        self._created_output = not os.path.exists(plan.output)
         proc = QProcess(self)
         proc.setProcessChannelMode(QProcess.ProcessChannelMode.SeparateChannels)
         proc.readyReadStandardOutput.connect(self._on_progress)
@@ -447,20 +506,30 @@ class Exporter(QObject):
             self._proc = None
             self.finished.emit(False, "could not run ffmpeg")
 
+    def _discard_broken(self, plan: Plan | None) -> None:
+        """Clear away a half-written clip, but only one we put there.
+
+        A killed or failed encode leaves a file that plays for a second and then
+        stops, which the next export then trips over with "replace this?".
+        """
+        if plan is None or not self._created_output:
+            return
+        try:
+            os.remove(plan.output)
+        except OSError:
+            pass
+
     def _on_finished(self, code: int, status) -> None:
         plan, self._plan = self._plan, None
         self._proc = None
         if self._cancelled:
-            if plan and os.path.exists(plan.output):
-                try:
-                    os.remove(plan.output)  # a killed encode leaves a broken file
-                except OSError:
-                    pass
+            self._discard_broken(plan)
             self.finished.emit(False, "Export cancelled")
             return
         if code == 0 and plan and os.path.exists(plan.output):
             size = os.path.getsize(plan.output) / 1_000_000
             self.finished.emit(True, f"Saved {os.path.basename(plan.output)}  ·  {size:.0f} MB")
             return
+        self._discard_broken(plan)
         tail = [ln for ln in self._stderr.strip().splitlines() if ln.strip()]
         self.finished.emit(False, tail[-1] if tail else f"ffmpeg failed (exit {code})")

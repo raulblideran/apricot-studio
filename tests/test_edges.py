@@ -14,6 +14,7 @@ import shutil
 import subprocess
 import tempfile
 import unittest
+import unittest.mock
 
 import export
 import media
@@ -21,6 +22,11 @@ from tests import fixtures
 from tests.test_units import make_info
 
 KF = [0.0, 2.0, 4.0]
+
+
+def value_after(args, flag):
+    """The argument following `flag`, or None."""
+    return args[args.index(flag) + 1] if flag in args else None
 
 
 class ContainerExtension(unittest.TestCase):
@@ -125,6 +131,24 @@ class DegenerateRanges(unittest.TestCase):
         plan = export.build(self.info, 10.0, 20.0, "/tmp/o.mp4", KF)
         self.assertEqual(plan.duration, plan.duration)
 
+    # The two below repeat the cases above with a start that sits *on* a
+    # keyframe, so the stream-copy branch runs instead of the re-encode one. It
+    # had no duration floor of its own, and KF above never lands on the start
+    # times used here, so every degenerate-range test was exercising one half of
+    # build() and reporting on both.
+
+    def test_reversed_range_stays_positive_on_a_keyframe_too(self):
+        plan = export.build(self.info, 4.0, 3.0, "/tmp/o.mp4", KF)
+        self.assertTrue(plan.lossless, "this test is pointless off the copy path")
+        self.assertGreater(plan.duration, 0.0)
+        self.assertGreater(float(value_after(plan.args, "-t")), 0.0,
+                           "ffmpeg refuses a negative -t")
+
+    def test_zero_length_range_on_a_keyframe_yields_a_frame(self):
+        plan = export.build(self.info, 4.0, 4.0, "/tmp/o.mp4", KF)
+        self.assertTrue(plan.lossless)
+        self.assertAlmostEqual(plan.duration, self.info.frame_duration, places=6)
+
 
 class SizeArithmeticLimits(unittest.TestCase):
     def test_near_zero_duration_does_not_explode(self):
@@ -224,6 +248,36 @@ class UnreadableSources(unittest.TestCase):
                         "-c:a", "libopus", audio], check=True, capture_output=True)
         with self.assertRaises(RuntimeError):
             media.probe(audio)
+
+    def test_ffprobe_is_given_a_deadline(self):
+        """probe() runs on the UI thread, so a hang there is a hung window.
+
+        Asserts the deadline is actually handed over rather than only that a
+        timeout is handled: a test that raises TimeoutExpired by hand passes
+        just as happily against a probe that would wait forever.
+        """
+        seen = {}
+
+        def record(*args, **kwargs):
+            seen.update(kwargs)
+            raise subprocess.TimeoutExpired(cmd="ffprobe", timeout=1)
+
+        with unittest.mock.patch.object(subprocess, "run", record):
+            with self.assertRaises(RuntimeError):
+                media.probe("/tmp/whatever.mp4")
+        self.assertGreater(seen.get("timeout") or 0, 0,
+                           "nothing here can interrupt a probe that never returns")
+
+    def test_a_probe_that_gives_up_says_so_in_words(self):
+        # TimeoutExpired is a SubprocessError, not an OSError, so it would sail
+        # straight past the caller that opens files.
+        def stall(*args, **kwargs):
+            raise subprocess.TimeoutExpired(cmd="ffprobe", timeout=20)
+
+        with unittest.mock.patch.object(subprocess, "run", stall):
+            with self.assertRaises(RuntimeError) as caught:
+                media.probe("/tmp/whatever.mp4")
+        self.assertIn("gave up", str(caught.exception).lower())
 
     def test_error_message_says_something_useful(self):
         try:

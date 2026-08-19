@@ -201,13 +201,29 @@ class MediaInfo:
         return "  ·  ".join(bits)
 
 
+# A header read on a local file is milliseconds. This is not a performance
+# budget but a way out: probe() runs synchronously on the UI thread, so a stalled
+# network mount or a failing disk would otherwise hang the window with no way to
+# close it.
+PROBE_TIMEOUT = 20
+
+
 def probe(path: str) -> MediaInfo:
     """Read a file's parameters. Raises RuntimeError if it isn't playable video."""
-    result = subprocess.run(
-        [FFPROBE, "-v", "error", "-show_streams", "-show_format", "-of", "json", path],
-        capture_output=True,
-        text=True,
-    )
+    try:
+        result = subprocess.run(
+            [FFPROBE, "-v", "error", "-show_streams", "-show_format", "-of", "json",
+             path],
+            capture_output=True,
+            text=True,
+            timeout=PROBE_TIMEOUT,
+        )
+    except subprocess.TimeoutExpired:
+        # TimeoutExpired is a SubprocessError, not an OSError, so it would sail
+        # past the callers that catch the latter.
+        raise RuntimeError(
+            f"ffprobe gave up after {PROBE_TIMEOUT}s -- is the drive still there?"
+        ) from None
     if result.returncode != 0:
         raise RuntimeError(result.stderr.strip() or "ffprobe could not read this file")
 
