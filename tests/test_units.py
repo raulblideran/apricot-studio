@@ -215,3 +215,42 @@ class OptionsBehaviour(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TheApplicationIcon(unittest.TestCase):
+    """The icon is drawn by Qt, whose SVG renderer is Tiny 1.2.
+
+    It has no filters at all, and it ignores clipPath outright -- a clipped
+    shape paints over the whole canvas rather than being clipped. So a drawing
+    that looks right in an editor can arrive in the taskbar looking broken, and
+    asserting it here is cheaper than noticing it there.
+    """
+
+    def setUp(self):
+        import os
+        root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        self.path = os.path.join(root, "io.github.raulblideran.ApricotStudio.svg")
+        if not os.path.exists(self.path):
+            self.skipTest("the icon is not installed beside the source")
+        with open(self.path, encoding="utf-8") as handle:
+            self.svg = handle.read()
+
+    def test_it_is_well_formed(self):
+        import xml.etree.ElementTree as ElementTree
+        ElementTree.parse(self.path)
+
+    def test_it_scales(self):
+        self.assertIn("viewBox", self.svg)
+
+    def test_it_uses_nothing_qt_will_drop_on_the_floor(self):
+        # Markup, not raw text: the file explains this constraint in a comment,
+        # and a substring search finds its own documentation.
+        import xml.etree.ElementTree as ElementTree
+        tree = ElementTree.parse(self.path)
+        tags = {element.tag.rsplit("}", 1)[-1] for element in tree.iter()}
+        for feature in ("filter", "clipPath", "mask", "style"):
+            with self.subTest(feature=feature):
+                self.assertNotIn(feature, tags,
+                                 "Qt's renderer does not honour this")
+        attributes = {name for element in tree.iter() for name in element.attrib}
+        self.assertNotIn("clip-path", attributes)

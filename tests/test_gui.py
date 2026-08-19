@@ -1059,6 +1059,39 @@ class BrokenExportsAreClearedAway(unittest.TestCase):
             _app.processEvents()
 
 
+class TheApplicationIconRenders(unittest.TestCase):
+    """Whatever the drawing says, Qt has to make a picture out of it."""
+
+    def setUp(self):
+        from PyQt6.QtGui import QImageReader
+        if b"svg" not in QImageReader.supportedImageFormats():
+            self.skipTest("no Qt SVG image plugin here")
+        root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        self.path = os.path.join(root, "io.github.raulblideran.ApricotStudio.svg")
+        if not os.path.exists(self.path):
+            self.skipTest("the icon is not installed beside the source")
+
+    def sample(self, size):
+        from PyQt6.QtCore import QSize
+        from PyQt6.QtGui import QIcon
+        pixmap = QIcon(self.path).pixmap(QSize(size, size))
+        self.assertFalse(pixmap.isNull(), f"nothing came back at {size}px")
+        image = pixmap.toImage()
+        step = max(size // 10, 1)
+        return {image.pixel(x, y)
+                for x in range(0, size, step) for y in range(0, size, step)}
+
+    def test_it_draws_at_every_size_it_will_be_asked_for(self):
+        for size in (16, 24, 32, 48, 64, 128, 256):
+            with self.subTest(size=size):
+                self.assertGreater(len(self.sample(size)), 3,
+                                   "a flat square means the drawing did not render")
+
+    def test_it_is_not_a_blank_tile_at_taskbar_size(self):
+        # 16px is where an icon that leans on thin strokes falls apart.
+        self.assertGreater(len(self.sample(16)), 5)
+
+
 @unittest.skipUnless(REAL_WINDOWS, "needs a real display")
 class EmptyWindow(unittest.TestCase):
     """A freshly opened window, before any file is chosen."""
