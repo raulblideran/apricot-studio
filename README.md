@@ -6,7 +6,7 @@ The export inherits every setting from the source, so there is nothing to config
 Built for pulling a highlight out of a gpu-screen-recorder replay buffer without
 opening kdenlive or DaVinci.
 
-![the window](io.github.raulblideran.ApricotStudio.svg)
+<img src="io.github.raulblideran.ApricotStudio.svg" width="96" alt="Apricot Studio">
 
 ## Install
 
@@ -95,6 +95,7 @@ Three details worth recording, since each cost a build to find:
 ```sh
 apricot-studio                     # then Open…
 apricot-studio ~/Videos/clip.mp4   # or straight to a file
+apricot-studio --version           # answers without opening a window
 ```
 
 You can also drop a video onto the window, or pick one from **Recent**.
@@ -118,7 +119,9 @@ You can also drop a video onto the window, or pick one from **Recent**.
 
 Drag the orange handles to set in and out, drag anywhere else to scrub, or type
 an exact timecode into the In/Out boxes. Hovering shows the frame under the
-cursor. The wheel zooms, `Shift`+wheel pans, double-click toggles zoom.
+cursor. The wheel zooms, `Shift`+wheel pans, double-click toggles zoom. Zoomed
+in, the view pages along to keep up with playback. Clicking the picture pauses.
+The window reopens at the size you left it.
 
 The timeline shows a filmstrip, an audio waveform (the spikes are usually the
 moment you want) and ticks marking the source's keyframes. **Green ticks are
@@ -149,7 +152,7 @@ Defaults inherit everything, so leaving this row alone reproduces the source.
 
 | Control | What it does |
 |---|---|
-| **Format** | *Same as source*, **WebM** (VP9 + Opus), or **GIF** (480px, 15fps, with a proper generated palette). |
+| **Format** | *Same as source*, **WebM** (VP9 + Opus), or **GIF** (480px, 15fps, with a palette generated from the clip itself). |
 | **Audio** | Keep, mute, or pick one track when the source has several — a capture with separate desktop and mic tracks lists both. |
 | **Quality** | *Same as source*, *Smaller file*, *Smallest worth keeping*, or a size to fit: 10 / 25 / 50 / 100 MB. |
 
@@ -157,15 +160,26 @@ The quality presets scale against **this file's** bitrate rather than some fixed
 number, so *Smaller file* means about half of whatever you opened — the same
 preset behaves sensibly on a 720p capture and a 4K one. Hover any entry for what
 it does. The badge shows the estimated size for your current selection and
-updates as you drag; measured against real encodes it lands within 3%.
+updates as you drag; for a size target and for the source-format presets it
+lands within 3% of real encodes. WebM is looser, because VP9 is driven by
+quality rather than by a rate, so what comes out follows the footage.
 
 Only *Same as source* can be a lossless copy — asking for something smaller is,
 by definition, asking not to reproduce the original.
 
 Size targets aim safely under, since a limit that gets exceeded is a rejected
-upload: a 10 MB target lands around 8.9 MB. WebM is software VP9 and genuinely
-slow (no GPU encodes VP9), roughly 5× the time of an H.264 export. GIF has no
-size target, since its rate control is a colour palette rather than a bitrate.
+upload: a 10 MB target lands around 8.9 MB. Presets and size targets apply to
+WebM as well — they used to be accepted and then quietly ignored, so a WebM
+export came out the same size whatever you asked for. There a target is a
+ceiling more than an aim, since single-pass VP9 undershoots and 10 MB may land
+nearer 6, but under is the direction that matters for a limit.
+
+WebM is software VP9 and genuinely slow (no GPU encodes VP9), roughly 5× the
+time of an H.264 export. GIF has no size target, since its rate control is a
+colour palette rather than a bitrate.
+
+Whatever the format, the encoder is the one that suits the source: a VP9 or AV1
+file stays VP9 or AV1 rather than being turned into H.264 behind your back.
 
 ## Deleting the original
 
@@ -296,7 +310,7 @@ since AV1 in software is far too slow at 4K.
 ## Tests
 
 ```sh
-./run-tests.sh           # 315 tests, ~28s (real encodes)
+./run-tests.sh           # 379 tests, ~26s (real encodes)
 ./run-tests.sh --fast    # ~4s, skips anything that invokes ffmpeg
 ./run-tests.sh -v        # one line per test
 ```
@@ -317,7 +331,9 @@ it this project's only dependency.
 | `test_gui.py` | timeline geometry, zoom, snapping, painting, focus, accent, delete targeting, the blocked-folder dialog |
 
 Fixtures are synthesised with ffmpeg into `/tmp` — the suite never reads your
-video library. The `allp` fixture deliberately mirrors a gpu-screen-recorder
+video library, and it never writes your settings either: `XDG_CONFIG_HOME` is
+redirected before Qt loads, so a test that resizes a window cannot decide what
+size your copy opens at. The `allp` fixture deliberately mirrors a gpu-screen-recorder
 capture (H.264 all-P, 2 s GOP, Opus in MP4).
 
 **The tests are checked against the bugs they exist for.** Every defect this
@@ -342,11 +358,26 @@ is reverted:
 | a hidden folder reported as a missing file | caught |
 | the override command left unquoted | caught |
 | exporting into the portal's one-file directory | caught |
+| a GIF palette built from the rest of the file | caught |
+| WebM ignoring the quality preset and the size target | caught |
+| a size target re-encoding a VP9 source to H.264 | caught |
+| a negative duration on a cut that starts at a keyframe | caught |
+| the delete prompt reading the open file's length | caught |
+| an unencoded `file://` URI reaching the file manager | caught |
+| a half-written clip left behind by a failed export | caught |
+| a cancel deleting a file the export never wrote | caught |
+| a probe with no way to give up | caught |
+| controls left live after loading another file | caught |
+| the window forgetting its size | caught |
+| the playhead running off a zoomed timeline | caught |
+| a filmstrip that grew without limit | caught |
 
-Two of these were originally *missed* by tests that only looked like they
+Three of these were originally *missed* by tests that only looked like they
 covered the behaviour — one asserted a value was recorded without checking
-anything read it, the other used `endswith` where `"clip..webm"` would have
-passed. Both are why the sweep is worth running rather than assumed.
+anything read it, the second used `endswith` where `"clip..webm"` would have
+passed, and the third raised a timeout by hand and so passed just as happily
+against a probe that would have waited forever. All three are why the sweep is
+worth running rather than assumed.
 
 Window tests need a real display and skip cleanly without one, so the suite is
 green headless.

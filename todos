@@ -5,3 +5,12 @@
 5. Rework the qualities to ensure that they make more sense (with descriptions) ✅
 6. Rename from Clipper to Apricot Studio ✅
 7. User-selectable accent colour ✅ (11 options, Apricot default)
+8. Cyberpunk apricot icon ✅ (neon rim light, drawn for Qt's Tiny 1.2 renderer)
+9. Fix the exports that did not do what the window said ✅
+   (GIF palette read the whole file; WebM ignored quality and size targets;
+    a size target changed a VP9/AV1 source's codec)
+10. Remember the window size ✅ (not the delete checkbox — that stays disarmed)
+11. Timeline follows the playhead when zoomed; click the picture to pause ✅
+12. Cap the filmstrip so a long recording cannot fill memory ✅
+13. --version / --help, and a test that the version matches the metainfo ✅
+14. CI: the full suite plus desktop-file and appstream validation ✅

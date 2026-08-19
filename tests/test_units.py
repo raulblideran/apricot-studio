@@ -217,6 +217,55 @@ if __name__ == "__main__":
     unittest.main()
 
 
+class TheCommandLine(unittest.TestCase):
+    """The flags that answer without opening a window."""
+
+    def setUp(self):
+        import apricot
+        self.apricot = apricot
+
+    def run_cli(self, argv):
+        """Answer, and what it printed -- these write to stdout by design."""
+        import contextlib
+        import io
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            answer = self.apricot._cli(argv)
+        return answer, out.getvalue()
+
+    def test_version_is_answered(self):
+        for flag in ("--version", "-V"):
+            answer, printed = self.run_cli([flag])
+            self.assertEqual(answer, 0)
+            self.assertIn(self.apricot.__version__, printed)
+
+    def test_help_is_answered(self):
+        for flag in ("--help", "-h"):
+            answer, printed = self.run_cli([flag])
+            self.assertEqual(answer, 0)
+            self.assertIn("apricot-studio", printed)
+
+    def test_a_file_is_not_a_flag(self):
+        self.assertIsNone(self.run_cli(["/videos/clip.mp4"])[0])
+        self.assertIsNone(self.run_cli([])[0])
+
+    def test_a_file_called_help_still_opens_a_window(self):
+        self.assertIsNone(self.run_cli(["help.mp4"])[0])
+
+    def test_the_version_matches_the_one_the_flatpak_ships(self):
+        """The build reads the metainfo, so a drift here mislabels a release."""
+        import os
+        import re
+        root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        path = os.path.join(root, "io.github.raulblideran.ApricotStudio.metainfo.xml")
+        if not os.path.exists(path):
+            self.skipTest("metainfo is not installed beside the source")
+        with open(path, encoding="utf-8") as handle:
+            versions = re.findall(r'<release version="([^"]+)"', handle.read())
+        self.assertEqual(versions[0], self.apricot.__version__,
+                         "the newest release block and __version__ disagree")
+
+
 class TheApplicationIcon(unittest.TestCase):
     """The icon is drawn by Qt, whose SVG renderer is Tiny 1.2.
 

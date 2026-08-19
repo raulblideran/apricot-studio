@@ -75,6 +75,28 @@
   <content_rating type="oars-1.1"/>
 
   <releases>
+    <release version="1.2.0" date="2026-08-19">
+      <description>
+        <p>
+          Several exports were quietly not doing what the window said they were
+          doing. Each of those is fixed, and each now has a test that was
+          confirmed to fail without it.
+        </p>
+        <ul>
+          <li>A GIF is cut from the clip alone. It used to read the rest of the file to build its palette — minutes and gigabytes of memory on a long recording, and colours taken from footage that was never in the clip</li>
+          <li>WebM honours the quality preset and the size target. Both were ignored, while the estimate beside the button promised the size that had been asked for</li>
+          <li>A size target no longer re-encodes a VP9 or AV1 source to H.264, which for a WebM source produced a file no player would accept</li>
+          <li>The prompt offering to delete the original states the length of that file rather than of whichever one is open now</li>
+          <li>Show in folder works for clips whose names contain spaces or punctuation</li>
+          <li>A failed or cancelled export clears away the half-written clip it left behind, and never removes a file it did not write</li>
+        </ul>
+        <p>
+          The window also remembers its size, the timeline follows the playhead
+          when zoomed in, clicking the picture pauses, and very long recordings
+          no longer fill memory with filmstrip frames. New icon.
+        </p>
+      </description>
+    </release>
     <release version="1.1.0" date="2026-08-15">
       <description>
         <p>

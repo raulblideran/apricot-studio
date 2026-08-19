@@ -48,6 +48,22 @@ VIDEO_EXTS = {".mp4", ".mkv", ".mov", ".webm", ".avi", ".m4v", ".ts", ".flv",
               ".wmv", ".mpg", ".mpeg", ".m2ts", ".3gp", ".ogv"}
 VIDEO_SUFFIXES = " ".join(f"*{ext}" for ext in sorted(VIDEO_EXTS))
 
+# The metainfo carries this too, because that is what the flatpak build reads.
+# A test asserts the two agree, so a release cannot go out labelled as the one
+# before it -- which is the mistake this constant exists to make impossible.
+__version__ = "1.2.0"
+
+USAGE = """\
+Apricot Studio -- open a video, mark in and out, export the clip.
+
+    apricot-studio [FILE]
+
+  -h, --help     show this and exit
+  -V, --version  show the version and exit
+
+Space play/pause · I / O set in and out · S snap the in-point to a keyframe
+Z zoom · Ctrl+Return export · Esc cancel
+"""
 MAX_RECENT = 10
 
 # Below this an "export" cannot be a real clip, and the original must be kept.
@@ -1274,7 +1290,27 @@ class ApricotStudio(QMainWindow):
         super().closeEvent(event)
 
 
+def _cli(argv: list[str]) -> int | None:
+    """Answer the flags that need no window. None means "carry on and open one".
+
+    Runs before anything Qt is built, so --version answers over ssh and on a
+    machine with no display -- and so it stays testable without a window.
+    """
+    for arg in argv:
+        if arg in ("-h", "--help"):
+            print(USAGE, end="")
+            return 0
+        if arg in ("-V", "--version"):
+            print(f"apricot-studio {__version__}")
+            return 0
+    return None
+
+
 def main() -> int:
+    answered = _cli(sys.argv[1:])
+    if answered is not None:
+        return answered
+
     app = QApplication(sys.argv)
     app.setApplicationName("Apricot Studio")
     app.setApplicationDisplayName("Apricot Studio")
