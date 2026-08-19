@@ -13,7 +13,7 @@ import os
 import unittest
 import unittest.mock       # 3.14 no longer pulls this in with unittest itself
 
-from PyQt6.QtCore import QPoint, Qt
+from PyQt6.QtCore import QPoint, QSettings, Qt
 from PyQt6.QtGui import QImage
 from PyQt6.QtWidgets import QApplication, QLineEdit, QMessageBox
 
@@ -204,6 +204,53 @@ class Zoom(unittest.TestCase):
         self.assertGreater(self.tl._view_end, 45.0)
 
 
+class FollowingThePlayhead(unittest.TestCase):
+    """Zoomed in, playback used to run off the edge with the view standing still."""
+
+    def setUp(self):
+        self.tl = make_timeline()
+        self.tl._set_view(40.0, 50.0)
+
+    def test_the_view_moves_when_playback_leaves_it(self):
+        self.tl.set_position(52.0)
+        self.assertLessEqual(self.tl._view_start, 52.0)
+        self.assertGreaterEqual(self.tl._view_end, 52.0)
+
+    def test_it_pages_rather_than_centres(self):
+        # The playhead should land near the left, so there is a screenful of
+        # file ahead of it rather than half of one.
+        self.tl.set_position(52.0)
+        into = (52.0 - self.tl._view_start) / self.tl.view_span
+        self.assertLess(into, 0.35)
+
+    def test_jumping_backwards_leaves_room_behind(self):
+        self.tl.set_position(20.0)
+        into = (20.0 - self.tl._view_start) / self.tl.view_span
+        self.assertGreater(into, 0.5)
+
+    def test_the_span_is_unchanged(self):
+        before = self.tl.view_span
+        self.tl.set_position(52.0)
+        self.assertAlmostEqual(self.tl.view_span, before, places=6)
+
+    def test_it_stays_put_while_the_view_still_holds_the_playhead(self):
+        self.tl.set_position(45.0)
+        self.assertAlmostEqual(self.tl._view_start, 40.0)
+
+    def test_it_does_not_fight_a_drag(self):
+        # Scrubbing sets the position on every mouse move; paging under the
+        # pointer would drag the file out from under it.
+        self.tl._drag = "seek"
+        self.tl.set_position(52.0)
+        self.assertAlmostEqual(self.tl._view_start, 40.0)
+
+    def test_an_unzoomed_timeline_never_moves(self):
+        tl = make_timeline()
+        tl.set_position(80.0)
+        self.assertAlmostEqual(tl._view_start, 0.0)
+        self.assertAlmostEqual(tl.view_span, DURATION)
+
+
 class Filmstrip(unittest.TestCase):
     def setUp(self):
         self.tl = make_timeline()
@@ -231,6 +278,44 @@ class Filmstrip(unittest.TestCase):
 
     def test_hover_is_safe_before_any_frames_arrive(self):
         self.assertIsNone(self.tl._nearest_thumb(45.0))
+
+
+class ALongRecording(unittest.TestCase):
+    """A two-hour file has thousands of keyframes; the strip must not hold them all."""
+
+    def setUp(self):
+        self.tl = Timeline()
+        self.tl.resize(1000, 112)
+        self.tl.reset(7200.0)
+        self.frames = 2000
+        self.tl.set_keyframes([i * 3.6 for i in range(self.frames)])
+        for _ in range(self.frames):
+            self.tl.add_thumbnail(QImage(timeline_mod.THUMB_W, timeline_mod.THUMB_H,
+                                         QImage.Format.Format_RGB888))
+
+    def test_the_strip_stops_growing(self):
+        self.assertLessEqual(len(self.tl._thumbs), timeline_mod.MAX_THUMBS)
+
+    def test_it_still_knows_when_each_kept_frame_was_taken(self):
+        # Thinning must widen the interval each frame stands for, not shift the
+        # strip out of step with the keyframes it was decoded from.
+        self.assertAlmostEqual(self.tl._thumb_time(0), 0.0)
+        last = len(self.tl._thumbs) - 1
+        self.assertAlmostEqual(self.tl._thumb_time(last),
+                               (last * self.tl._thumb_stride) * 3.6)
+
+    def test_the_strip_still_spans_the_file(self):
+        self.assertGreater(self.tl._thumb_time(len(self.tl._thumbs) - 1),
+                           7200.0 * 0.9)
+
+    def test_it_paints(self):
+        self.tl.grab()
+
+    def test_reset_starts_over_at_full_resolution(self):
+        self.tl.reset(60.0)
+        self.assertEqual(self.tl._thumb_stride, 1)
+        self.assertEqual(self.tl._thumbs_seen, 0)
+        self.assertEqual(self.tl._thumbs, [])
 
 
 class Painting(unittest.TestCase):
@@ -807,6 +892,173 @@ class CloseFile(unittest.TestCase):
         self.assertTrue(self.window._export_btn.isEnabled())
 
 
+class WhatTheDeletePromptSays(unittest.TestCase):
+    """Regression: the prompt read its duration off whatever file was open.
+
+    Every other number in it comes from the record captured when the export
+    started, which is the whole reason that record exists -- another video can
+    be opened while an encode runs. The duration did not, so the dialog would
+    name one file and describe the length of another.
+    """
+
+    def setUp(self):
+        from apricot import Exported, delete_prompt
+        self.delete_prompt = delete_prompt
+        self.record = Exported(source="/videos/replay.mp4", output="/videos/clip.mp4",
+                               duration=600.0, kept=60.0)
+
+    def test_it_names_the_file_that_was_cut(self):
+        text, _ = self.delete_prompt(self.record, 110_000_000)
+        self.assertIn("replay.mp4", text)
+
+    def test_the_length_is_the_one_that_was_recorded(self):
+        _, detail = self.delete_prompt(self.record, 110_000_000)
+        self.assertIn("00:10:00.000", detail,
+                      "the length must come from the record, not the open file")
+
+    def test_it_says_how_much_is_being_thrown_away(self):
+        _, detail = self.delete_prompt(self.record, 110_000_000)
+        self.assertIn("60.0s", detail)
+        self.assertIn("10%", detail)     # 60s kept out of 600
+        self.assertIn("90%", detail)     # and the rest, gone with the file
+
+    def test_it_reassures_about_the_clip(self):
+        _, detail = self.delete_prompt(self.record, 110_000_000)
+        self.assertIn("clip.mp4", detail)
+
+    def test_a_zero_length_record_does_not_divide_by_zero(self):
+        from apricot import Exported
+        blank = Exported(source="/a.mp4", output="/b.mp4", duration=0.0, kept=0.0)
+        self.delete_prompt(blank, 0)
+
+
+class ShowingTheClipInAFileManager(unittest.TestCase):
+    """The URI used to be interpolated, so a space or a # broke it."""
+
+    def uri(self, path):
+        from apricot import ApricotStudio
+        args = ApricotStudio._reveal_args(path)
+        return next(a.removeprefix("array:string:") for a in args
+                    if a.startswith("array:string:"))
+
+    def test_an_ordinary_path_is_a_file_url(self):
+        self.assertEqual(self.uri("/videos/clip.mp4"), "file:///videos/clip.mp4")
+
+    def test_spaces_are_encoded(self):
+        self.assertNotIn(" ", self.uri("/videos/my clip.mp4"))
+
+    def test_a_hash_cannot_cut_the_path_short(self):
+        uri = self.uri("/videos/my clip #2.mp4")
+        self.assertNotIn("#", uri)
+        self.assertTrue(uri.endswith(".mp4"), uri)
+
+    def test_percent_signs_survive(self):
+        self.assertIn("%25", self.uri("/videos/100%.mp4"))
+
+    def test_non_ascii_names_are_encoded(self):
+        uri = self.uri("/videos/rêve.mp4")
+        self.assertEqual(uri, "file:///videos/r%C3%AAve.mp4")
+
+    def test_the_uri_is_plain_ascii(self):
+        # Whatever is on the other end of the bus is parsing this, not reading it.
+        uri = self.uri("/videos/rêve #1 (best).mp4")
+        self.assertTrue(uri.isascii(), uri)
+
+    def test_the_call_still_asks_the_file_manager_to_select_it(self):
+        from apricot import ApricotStudio
+        args = ApricotStudio._reveal_args("/videos/clip.mp4")
+        self.assertIn("org.freedesktop.FileManager1.ShowItems", args)
+
+
+class TheOpenDialogOffersWhatCanBeDropped(unittest.TestCase):
+    """Two lists of extensions, kept by hand, had drifted apart."""
+
+    def test_every_droppable_extension_appears_in_the_filter(self):
+        import apricot
+        for ext in apricot.VIDEO_EXTS:
+            with self.subTest(ext=ext):
+                self.assertIn(f"*{ext}", apricot.VIDEO_SUFFIXES)
+
+    def test_the_filter_is_only_extensions_that_can_be_dropped(self):
+        import apricot
+        offered = {p.removeprefix("*") for p in apricot.VIDEO_SUFFIXES.split()}
+        self.assertEqual(offered, apricot.VIDEO_EXTS)
+
+
+class BrokenExportsAreClearedAway(unittest.TestCase):
+    """A failed encode leaves a file that plays for a second and stops.
+
+    It must go -- but only if this export is what put it there. ffmpeg opens the
+    destination with -y, so an overwrite is lost the moment the encode starts;
+    if it failed before reaching that point, the file sitting there is whole and
+    belongs to the user.
+    """
+
+    def setUp(self):
+        import tempfile
+        import export
+        self.export = export
+        self.tmp = tempfile.mkdtemp(prefix="apricot-broken-")
+
+    def tearDown(self):
+        import shutil
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def half_written(self, name="clip.mp4"):
+        path = os.path.join(self.tmp, name)
+        with open(path, "wb") as handle:
+            handle.write(b"\0" * 512)
+        return path
+
+    def finish(self, path, *, created, code=1, cancelled=False):
+        exporter = self.export.Exporter()
+        exporter._plan = self.export.Plan(args=[], output=path, duration=1.0, label="x")
+        exporter._created_output = created
+        exporter._cancelled = cancelled
+        exporter._on_finished(code, None)
+        return os.path.exists(path)
+
+    def test_a_failed_encode_takes_its_own_leftovers_with_it(self):
+        self.assertFalse(self.finish(self.half_written(), created=True))
+
+    def test_a_cancelled_encode_does_too(self):
+        self.assertFalse(self.finish(self.half_written(), created=True, cancelled=True))
+
+    def test_a_file_that_was_already_there_is_left_alone(self):
+        self.assertTrue(self.finish(self.half_written(), created=False))
+
+    def test_a_cancel_does_not_delete_a_file_it_never_opened(self):
+        self.assertTrue(self.finish(self.half_written(), created=False, cancelled=True))
+
+    def test_a_successful_encode_keeps_its_output(self):
+        self.assertTrue(self.finish(self.half_written(), created=True, code=0))
+
+    def test_start_notices_a_destination_that_already_exists(self):
+        import time
+        path = self.half_written("existing.mp4")
+        exporter = self.export.Exporter()
+        # -version exits at once, so this exercises start()'s bookkeeping
+        # without an encode.
+        exporter.start(self.export.Plan(args=["-version"], output=path,
+                                        duration=1.0, label="x"))
+        self.assertFalse(exporter._created_output)
+        deadline = time.monotonic() + 10
+        while exporter.running and time.monotonic() < deadline:
+            _app.processEvents()
+        self.assertTrue(os.path.exists(path), "it was not ours to remove")
+
+    def test_start_notices_a_destination_it_will_create(self):
+        import time
+        exporter = self.export.Exporter()
+        exporter.start(self.export.Plan(args=["-version"],
+                                        output=os.path.join(self.tmp, "new.mp4"),
+                                        duration=1.0, label="x"))
+        self.assertTrue(exporter._created_output)
+        deadline = time.monotonic() + 10
+        while exporter.running and time.monotonic() < deadline:
+            _app.processEvents()
+
+
 @unittest.skipUnless(REAL_WINDOWS, "needs a real display")
 class EmptyWindow(unittest.TestCase):
     """A freshly opened window, before any file is chosen."""
@@ -832,6 +1084,125 @@ class EmptyWindow(unittest.TestCase):
 
     def test_no_badge_without_a_file(self):
         self.assertEqual(self.window._badge.text(), "")
+
+
+@unittest.skipUnless(REAL_WINDOWS, "needs a real display")
+class FormatRulesSurviveAReload(unittest.TestCase):
+    """Regression: loading a file handed back controls the format had disabled.
+
+    Both _set_loaded and _rebuild_audio_box enable things on the strength of the
+    file alone; neither knows GIF has no use for a quality preset or an audio
+    track. Loading a second file with GIF selected left both boxes live and
+    doing nothing.
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        import shutil
+        import tempfile
+        from apricot import ApricotStudio
+        from tests import fixtures
+        cls.tmp = tempfile.mkdtemp(prefix="apricot-reload-")
+        cls.first = os.path.join(cls.tmp, "one.mp4")
+        cls.second = os.path.join(cls.tmp, "two.mp4")
+        shutil.copy(fixtures.sample("allp"), cls.first)
+        shutil.copy(fixtures.sample("allp"), cls.second)
+        cls.window = ApricotStudio()
+        cls.window.show()
+
+    @classmethod
+    def tearDownClass(cls):
+        import shutil
+        cls.window._close_source()
+        dispose(cls.window)
+        shutil.rmtree(cls.tmp, ignore_errors=True)
+
+    def gif(self):
+        import export
+        box = self.window._fmt_box
+        box.setCurrentIndex(box.findData(export.GIF))
+
+    def setUp(self):
+        self.window.load(self.first)
+        self.window._fmt_box.setCurrentIndex(0)
+
+    def test_gif_disables_the_quality_box(self):
+        self.gif()
+        self.assertFalse(self.window._size_box.isEnabled())
+
+    def test_it_is_still_disabled_after_loading_another_file(self):
+        self.gif()
+        self.window.load(self.second)
+        self.assertFalse(self.window._size_box.isEnabled(),
+                         "a control that does nothing must not look live")
+
+    def test_audio_stays_disabled_after_loading_another_file(self):
+        self.gif()
+        self.window.load(self.second)
+        self.assertFalse(self.window._audio_box.isEnabled())
+
+    def test_going_back_to_source_format_hands_them_back(self):
+        self.gif()
+        self.window.load(self.second)
+        self.window._fmt_box.setCurrentIndex(0)
+        self.assertTrue(self.window._size_box.isEnabled())
+        self.assertTrue(self.window._audio_box.isEnabled())
+
+    def test_the_extension_follows_the_format_across_a_load(self):
+        self.gif()
+        self.window.load(self.second)
+        self.assertEqual(self.window._out_ext.text(), ".gif")
+
+
+@unittest.skipUnless(REAL_WINDOWS, "needs a real display")
+class TheWindowComesBackTheSizeItWasLeft(unittest.TestCase):
+    """Geometry is remembered. The destructive option deliberately is not."""
+
+    def setUp(self):
+        from PyQt6.QtCore import QSettings
+        self.settings = QSettings("ApricotStudio", "ApricotStudio")
+        self.saved = self.settings.value("geometry")
+        self.addCleanup(self._restore)
+
+    def _restore(self):
+        if self.saved is None:
+            self.settings.remove("geometry")
+        else:
+            self.settings.setValue("geometry", self.saved)
+
+    def test_the_size_survives_a_restart(self):
+        from apricot import ApricotStudio
+        first = ApricotStudio()
+        first.show()
+        first.resize(1000, 700)
+        _app.processEvents()
+        first.close()          # closeEvent is what writes it down
+        dispose(first)
+
+        second = ApricotStudio()
+        self.addCleanup(dispose, second)
+        self.assertEqual(second.size().width(), 1000)
+        self.assertEqual(second.size().height(), 700)
+
+    def test_the_delete_option_is_never_remembered(self):
+        from apricot import ApricotStudio
+        first = ApricotStudio()
+        first.show()
+        first._delete_source.setChecked(True)
+        first.close()
+        dispose(first)
+
+        second = ApricotStudio()
+        self.addCleanup(dispose, second)
+        self.assertFalse(second._delete_source.isChecked(),
+                         "arming a destructive option must not persist")
+
+    def test_a_stored_value_of_the_wrong_shape_is_ignored(self):
+        from apricot import ApricotStudio
+        self.settings.setValue("geometry", "not a geometry")
+        window = ApricotStudio()
+        self.addCleanup(dispose, window)
+        self.assertGreater(window.size().width(), 0)
 
 
 @unittest.skipUnless(REAL_WINDOWS, "needs a real display")

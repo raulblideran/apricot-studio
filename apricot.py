@@ -25,7 +25,8 @@ from dataclasses import dataclass
 from datetime import datetime
 from urllib.parse import quote
 
-from PyQt6.QtCore import QEvent, QSettings, Qt, QTimer, QUrl, pyqtSlot
+from PyQt6.QtCore import (QByteArray, QEvent, QProcess, QSettings, Qt, QTimer,
+                          QUrl, pyqtSlot)
 from PyQt6.QtGui import QColor, QDesktopServices, QIcon, QPainter, QPixmap
 from PyQt6.QtMultimedia import QAudioOutput, QMediaPlayer
 from PyQt6.QtMultimediaWidgets import QVideoWidget
@@ -41,9 +42,12 @@ from media import (KeyframeLoader, MediaInfo, ThumbnailLoader, WaveformLoader,
                    fmt_tc, parse_tc, probe)
 from timeline import Timeline
 
-VIDEO_SUFFIXES = "*.mp4 *.mkv *.mov *.webm *.avi *.m4v *.ts *.flv *.wmv *.mpg *.mpeg"
+# One list, two shapes. Kept separately they drifted: .m2ts, .3gp and .ogv could
+# be dropped onto the window but were invisible in the Open dialog.
 VIDEO_EXTS = {".mp4", ".mkv", ".mov", ".webm", ".avi", ".m4v", ".ts", ".flv",
               ".wmv", ".mpg", ".mpeg", ".m2ts", ".3gp", ".ogv"}
+VIDEO_SUFFIXES = " ".join(f"*{ext}" for ext in sorted(VIDEO_EXTS))
+
 MAX_RECENT = 10
 
 # Below this an "export" cannot be a real clip, and the original must be kept.
@@ -86,6 +90,26 @@ class Exported:
     kept: float
 
 
+def delete_prompt(record: Exported, source_bytes: int) -> tuple[str, str]:
+    """Headline and detail for the offer to remove the file that was cut.
+
+    Every number comes from the record captured when the export started rather
+    than from whatever happens to be open now. The wording lives out here, as
+    sandbox.explain() does, so it can be tested without a modal dialog on screen
+    -- which is how the duration below came to be read off the wrong file.
+    """
+    share = record.kept / record.duration * 100 if record.duration else 0
+    text = f"Delete “{os.path.basename(record.source)}”?"
+    detail = (
+        f"{source_bytes / 1_000_000:.0f} MB  ·  {fmt_tc(record.duration)} long\n\n"
+        f"Your clip kept {record.kept:.1f}s of it — about {share:.0f}%. "
+        f"The other {100 - share:.0f}% is only in this file, and cannot be "
+        f"recovered from the clip.\n\n"
+        f"The clip you just exported is not affected:\n"
+        f"{os.path.basename(record.output)}")
+    return text, detail
+
+
 class ApricotStudio(QMainWindow):
     def __init__(self, path: str | None = None):
         super().__init__()
@@ -102,6 +126,7 @@ class ApricotStudio(QMainWindow):
         self._exported: Exported | None = None
         self._settings = QSettings("ApricotStudio", "ApricotStudio")
         self._migrate_settings()
+        self._restore_geometry()
 
         self.setAcceptDrops(True)
 
@@ -408,6 +433,17 @@ class ApricotStudio(QMainWindow):
         self._badge.style().unpolish(self._badge)
         self._badge.style().polish(self._badge)
 
+    def _restore_geometry(self) -> None:
+        """Come back the size the window was left at.
+
+        Size and position only. The delete-original checkbox is deliberately not
+        remembered: it arms something irreversible, so it is chosen again every
+        launch or not at all.
+        """
+        stored = self._settings.value("geometry")
+        if isinstance(stored, (QByteArray, bytes, bytearray)):
+            self.restoreGeometry(QByteArray(stored))
+
     def _migrate_settings(self) -> None:
         """Carry settings over from the name this app used to have.
 
@@ -549,6 +585,10 @@ class ApricotStudio(QMainWindow):
         self._player.pause()
         self._set_loaded(True)
         self._rebuild_audio_box(info)
+        # Both calls above hand out enabled controls on the strength of the file
+        # alone. Only this knows that GIF has no use for either, so without it a
+        # reload leaves the quality box live and inert.
+        self._on_options_changed()
         self._suggest_output(path)
         self._reveal_btn.setVisible(False)
         self._sync_marks()
@@ -924,20 +964,12 @@ class ApricotStudio(QMainWindow):
             return
         source, clip = candidate
 
-        size_mb = os.path.getsize(source) / 1_000_000
-        kept = record.kept
-        share = kept / record.duration * 100 if record.duration else 0
-
+        text, detail = delete_prompt(record, os.path.getsize(source))
         box = QMessageBox(self)
         box.setIcon(QMessageBox.Icon.Warning)
         box.setWindowTitle("Delete the original?")
-        box.setText(f"Delete “{os.path.basename(source)}”?")
-        box.setInformativeText(
-            f"{size_mb:.0f} MB  ·  {fmt_tc(self._info.duration)} long\n\n"
-            f"Your clip kept {kept:.1f}s of it — about {share:.0f}%. "
-            f"The other {100 - share:.0f}% is only in this file, and cannot be "
-            f"recovered from the clip.\n\n"
-            f"The clip you just exported is not affected:\n{os.path.basename(clip)}")
+        box.setText(text)
+        box.setInformativeText(detail)
         trash = box.addButton("Move to Trash", QMessageBox.ButtonRole.AcceptRole)
         forever = box.addButton("Delete permanently", QMessageBox.ButtonRole.DestructiveRole)
         keep = box.addButton("Keep the file", QMessageBox.ButtonRole.RejectRole)
@@ -1102,21 +1134,37 @@ class ApricotStudio(QMainWindow):
         self._sel_label.setText("—")
         self._update_clock(0)
 
+    @staticmethod
+    def _reveal_args(path: str) -> list[str]:
+        """The dbus call that opens a file manager with `path` selected.
+
+        Dolphin, Nautilus and Nemo all implement this interface, and it selects
+        the file rather than merely opening its folder. The URI is built rather
+        than interpolated: a clip named "my clip #2.mp4" pasted straight into a
+        file:// string is one a parser may read as ending at the #.
+
+        FullyEncoded rather than the default: Qt's pretty form leaves spaces and
+        non-ASCII characters as they are, which is fine to show a person and not
+        fine to hand to something parsing a URI.
+        """
+        uri = QUrl.fromLocalFile(path).toString(
+            QUrl.ComponentFormattingOption.FullyEncoded)
+        return ["dbus-send", "--session", "--dest=org.freedesktop.FileManager1",
+                "--type=method_call", "/org/freedesktop/FileManager1",
+                "org.freedesktop.FileManager1.ShowItems",
+                f"array:string:{uri}", "string:"]
+
     def _reveal(self) -> None:
         """Open the file manager with the exported clip selected."""
         path = self._last_output
         if not path or not os.path.exists(path):
             return
-        try:
-            # Dolphin, Nautilus and Nemo all implement this interface, and it
-            # selects the file rather than just opening its folder.
-            subprocess.Popen(
-                ["dbus-send", "--session", "--dest=org.freedesktop.FileManager1",
-                 "--type=method_call", "/org/freedesktop/FileManager1",
-                 "org.freedesktop.FileManager1.ShowItems",
-                 f"array:string:file://{path}", "string:"],
-                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        except OSError:
+        # startDetached rather than Popen: nothing here waits for a file manager,
+        # and an unreaped Popen leaves a zombie behind for every click. It also
+        # answers whether the launch happened, so a desktop with no file manager
+        # falls back to opening the folder rather than doing nothing at all.
+        args = self._reveal_args(path)
+        if not QProcess.startDetached(args[0], args[1:]):
             QDesktopServices.openUrl(QUrl.fromLocalFile(os.path.dirname(path)))
 
     # ----- keyboard -----------------------------------------------------
@@ -1142,7 +1190,24 @@ class ApricotStudio(QMainWindow):
         if (event.type() == QEvent.Type.MouseButtonPress
                 and not isinstance(obj, QLineEdit)):
             self._release_text_focus()
+            # The picture is the one surface with nothing else to do with a
+            # click, and every video player treats it as play/pause.
+            if self._over_video(obj):
+                self.toggle_play()
         return super().eventFilter(obj, event)
+
+    def _over_video(self, obj) -> bool:
+        """Whether a click landed on the picture rather than on a control.
+
+        Walks up rather than comparing directly: depending on the platform the
+        video surface may be a child widget of QVideoWidget rather than the
+        widget itself, and the click arrives at whichever one is on top.
+        """
+        while isinstance(obj, QWidget):
+            if obj is self._video:
+                return True
+            obj = obj.parent()
+        return False
 
     def keyPressEvent(self, event):
         # Only keys the focused widget ignored reach here, so typing a timecode
@@ -1193,6 +1258,7 @@ class ApricotStudio(QMainWindow):
             super().keyPressEvent(event)
 
     def closeEvent(self, event):
+        self._settings.setValue("geometry", self.saveGeometry())
         if self._exporter.running:
             self._exporter.cancel()
         # Stop filtering application-wide events and let go of the media stack

@@ -29,6 +29,7 @@ HANDLE_W = 9
 GRAB_PX = 10                # how close the pointer must be to grab a handle
 SNAP_PX = 7                 # in-point snaps to a keyframe within this many pixels
 MIN_SPAN = 0.25             # don't zoom in past a quarter second
+MAX_THUMBS = 512            # how many filmstrip frames are worth holding
 
 BG = QColor(28, 30, 34)
 FILM_BG = QColor(20, 22, 25)
@@ -75,6 +76,10 @@ class Timeline(QWidget):
         self._in = 0.0
         self._out = 0.0
         self._thumbs: list[QImage] = []
+        # How many frames arrived, and how many of them one kept frame stands
+        # for. Both are needed to keep a thinned strip lined up with keyframes.
+        self._thumbs_seen = 0
+        self._thumb_stride = 1
         self._peaks: list[float] = []
         self._keyframes: list[float] = []
         self._cache: QPixmap | None = None
@@ -104,6 +109,8 @@ class Timeline(QWidget):
         self._in = 0.0
         self._out = self._duration
         self._thumbs = []
+        self._thumbs_seen = 0
+        self._thumb_stride = 1
         self._peaks = []
         self._keyframes = []
         self._view_start = 0.0
@@ -112,7 +119,20 @@ class Timeline(QWidget):
         self._invalidate()
 
     def add_thumbnail(self, image: QImage) -> None:
-        self._thumbs.append(image)
+        """Take a frame into the strip, thinning it out when there are too many.
+
+        The strip decodes keyframes, and a two-hour recording has one every
+        couple of seconds -- thousands of images held in memory and a draw call
+        each per repaint. Once the strip is full, dropping every other frame
+        halves both and doubles the interval it samples at, which is what a long
+        file zoomed out wants regardless.
+        """
+        if self._thumbs_seen % self._thumb_stride == 0:
+            self._thumbs.append(image)
+        self._thumbs_seen += 1
+        if len(self._thumbs) > MAX_THUMBS:
+            self._thumbs = self._thumbs[::2]
+            self._thumb_stride *= 2
         self._invalidate()
 
     def set_peaks(self, peaks: list[float]) -> None:
@@ -152,7 +172,27 @@ class Timeline(QWidget):
 
     def set_position(self, value: float) -> None:
         self._position = min(max(value, 0.0), self._duration)
+        self._follow_playhead()
         self.update()
+
+    def _follow_playhead(self) -> None:
+        """Page the view along when playback leaves it.
+
+        Zoomed in, the playhead used to walk off the edge and keep going while
+        the view stood still. This pages rather than scrolls: the static bands
+        live in a cached pixmap that has to be repainted whenever the visible
+        range moves, so one rebuild per screenful is affordable where one per
+        frame is not.
+        """
+        if self._drag is not None or not self.zoomed:
+            return
+        if self._view_start <= self._position <= self._view_end:
+            return
+        # Land the playhead near the left edge so there is somewhere to play
+        # into -- unless the jump was backwards, where the reverse is true.
+        span = self.view_span
+        lead = span * 0.15 if self._position > self._view_end else span * 0.85
+        self._set_view(self._position - lead, self._position - lead + span)
 
     def _invalidate(self) -> None:
         self._cache = None
@@ -229,11 +269,15 @@ class Timeline(QWidget):
     def _thumb_time(self, i: int) -> float:
         """When thumbnail `i` was taken.
 
-        The filmstrip decodes keyframes only, so frame i is keyframe i. If the
-        two loaders disagree on count, fall back to even spacing.
+        The filmstrip decodes keyframes only, so the i-th frame kept is keyframe
+        `i * stride` -- the stride being 1 until the strip fills up and starts
+        thinning itself. The count compared is frames *seen*, not frames kept,
+        for the same reason. If the two loaders disagree, fall back to even
+        spacing.
         """
-        if len(self._keyframes) == len(self._thumbs) and self._keyframes:
-            return self._keyframes[i]
+        if self._keyframes and len(self._keyframes) == self._thumbs_seen:
+            return self._keyframes[min(i * self._thumb_stride,
+                                       len(self._keyframes) - 1)]
         if len(self._thumbs) > 1:
             return self._duration * i / (len(self._thumbs) - 1)
         return 0.0
