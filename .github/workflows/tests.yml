@@ -1,0 +1,47 @@
+# The suite, on every push. Runs the whole thing including the real encodes:
+# the tests that catch the defects this project actually shipped are the ones
+# that invoke ffmpeg, so a CI run that skipped them would be reassurance without
+# cover.
+name: tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  suite:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install ffmpeg, PyQt6 and the packaging validators
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            ffmpeg \
+            python3-pyqt6 python3-pyqt6.qtmultimedia python3-pyqt6.qtsvg \
+            libegl1 libgl1 libxkbcommon-x11-0 \
+            desktop-file-utils appstream
+        # Distribution PyQt6 rather than a wheel, deliberately: the wheel drags
+        # in PyQt6-Qt6, a second complete copy of Qt, which is exactly what the
+        # flatpak manifest goes out of its way to avoid installing.
+
+      - name: Run the suite
+        env:
+          # No display on a runner. run-tests.sh works this out for itself and
+          # skips the window tests; setting it here makes that explicit rather
+          # than incidental.
+          QT_QPA_PLATFORM: offscreen
+        run: ./run-tests.sh
+
+      - name: Validate the desktop entry
+        # Only the flatpak's. The copy in the repo root is a template carrying an
+        # @EXEC@ placeholder that install.sh substitutes, so it is not a valid
+        # entry until it has been installed and never will be here.
+        run: desktop-file-validate flatpak/io.github.raulblideran.ApricotStudio.desktop
+
+      - name: Validate the metainfo
+        run: appstreamcli validate io.github.raulblideran.ApricotStudio.metainfo.xml
