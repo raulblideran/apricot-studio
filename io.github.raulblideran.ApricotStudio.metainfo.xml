@@ -75,14 +75,18 @@
   <content_rating type="oars-1.1"/>
 
   <releases>
-    <release version="1.2.0" date="2026-08-19">
+    <release version="1.2.0" date="2026-08-20">
       <description>
         <p>
-          Several exports were quietly not doing what the window said they were
-          doing. Each of those is fixed, and each now has a test that was
-          confirmed to fail without it.
+          Clicking Open crashed the application. It has done since 1.1.0, and
+          went unnoticed because every other way to reach a file still worked —
+          dragging one onto the window, Recent, Ctrl+O, and Open With from the
+          file manager. That is fixed, along with several exports that were
+          quietly not doing what the window said they were doing. Each fix has a
+          test that was confirmed to fail without it.
         </p>
         <ul>
+          <li>The Open button opens a file chooser rather than taking the window down with it</li>
           <li>A GIF is cut from the clip alone. It used to read the rest of the file to build its palette — minutes and gigabytes of memory on a long recording, and colours taken from footage that was never in the clip</li>
           <li>WebM honours the quality preset and the size target. Both were ignored, while the estimate beside the button promised the size that had been asked for</li>
           <li>A size target no longer re-encodes a VP9 or AV1 source to H.264, which for a WebM source produced a file no player would accept</li>
@@ -94,6 +98,12 @@
           The window also remembers its size, the timeline follows the playhead
           when zoomed in, clicking the picture pauses, and very long recordings
           no longer fill memory with filmstrip frames. New icon.
+        </p>
+        <p>
+          Track names in the audio menu need ffprobe 7 or newer to be read out
+          of an MP4. On an older one every track is still found and selectable,
+          listed by number. This build carries its own ffmpeg, so it is not
+          affected.
         </p>
       </description>
     </release>
