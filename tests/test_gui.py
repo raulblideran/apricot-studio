@@ -1349,7 +1349,7 @@ class OpeningWhatTheSandboxHides(unittest.TestCase):
                 unittest.mock.patch.object(type(self.window), "open_file") as chooser:
             self.window._report_open_failure(self.blocked, "No such file or directory")
         plain.assert_not_called()
-        chooser.assert_called_once_with(self.folder)
+        chooser.assert_called_once_with(start=self.folder)
 
     def test_closing_the_dialog_does_nothing_at_all(self):
         with self.confined(), self.press("Close"), \
@@ -1358,6 +1358,127 @@ class OpeningWhatTheSandboxHides(unittest.TestCase):
             self.window._report_open_failure(self.blocked, "No such file or directory")
         plain.assert_not_called()
         chooser.assert_not_called()
+
+
+@unittest.skipUnless(REAL_WINDOWS, "needs a real display")
+class TheButtonsThemselves(unittest.TestCase):
+    """Regression: clicking Open crashed the app, and nothing here noticed.
+
+    QPushButton.clicked carries a checked flag, and PyQt hands a slot as many
+    arguments as it will accept, so an optional positional parameter receives
+    False. open_file had one, so the chooser was asked to open a bool, and an
+    exception inside a slot is fatal in PyQt6 -- the window went away.
+
+    Every test that touched open_file called it directly with a string, or
+    replaced it with a mock and asserted it had been called. So the method was
+    covered from every side except the one the user presses, and the defect
+    lived in exactly that gap, through two releases.
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        import shutil
+        import tempfile
+        from apricot import ApricotStudio
+        from tests import fixtures
+        cls.tmp = tempfile.mkdtemp(prefix="apricot-buttons-")
+        cls.source = os.path.join(cls.tmp, "replay.mp4")
+        shutil.copy(fixtures.sample("allp"), cls.source)
+        cls.window = ApricotStudio()
+        cls.window.show()
+
+    @classmethod
+    def tearDownClass(cls):
+        import shutil
+        cls.window._close_source()
+        dispose(cls.window)
+        shutil.rmtree(cls.tmp, ignore_errors=True)
+
+    def chooser(self):
+        """Stand in for the Open dialog, recording the folder it was given.
+
+        Records rather than validates, and the tests check what it collected.
+        Raising here would be more faithful to the real call, which rejects a
+        non-string outright -- but an exception inside a slot is fatal in PyQt6,
+        so the suite would abort instead of reporting, and take every test after
+        it down as well.
+
+        The recording still has to be checked. A stand-in looser than the thing
+        it replaces is precisely how this defect stayed hidden: patch
+        getOpenFileName with something that accepts anything, assert only that
+        it was reached, and a bool sails through the suite and crashes in front
+        of a user.
+        """
+        from PyQt6.QtWidgets import QFileDialog
+        seen = []
+
+        def fake(parent, caption, directory, filt):
+            seen.append(directory)
+            return "", ""
+
+        patch = unittest.mock.patch.object(QFileDialog, "getOpenFileName", fake)
+        return patch, seen
+
+    def test_the_open_button_survives_being_pressed(self):
+        patch, seen = self.chooser()
+        with patch:
+            self.window._open_btn.click()
+        self.assertTrue(seen, "the button never reached the chooser")
+
+    def test_it_offers_a_folder_and_not_a_boolean(self):
+        patch, seen = self.chooser()
+        with patch:
+            self.window._open_btn.click()
+        self.assertIsInstance(seen[0], str,
+                              "Qt's checked flag reached the chooser as a folder")
+
+    def test_with_nothing_loaded_it_starts_in_videos(self):
+        patch, seen = self.chooser()
+        with patch:
+            self.window._close_source()
+            self.window._open_btn.click()
+        self.assertEqual(seen[0], os.path.expanduser("~/Videos"))
+
+    def test_with_a_file_open_it_starts_beside_it(self):
+        patch, seen = self.chooser()
+        with patch:
+            self.window.load(self.source)
+            self.window._open_btn.click()
+        self.assertEqual(seen[0], self.tmp)
+
+    def test_every_button_in_the_window_can_be_pressed(self):
+        """The sweep whose absence let the one above through.
+
+        Presses everything, with the doors out of the process held shut: the
+        two file dialogs, the menus behind Recent and the accent swatch, the
+        encoder, and the call that would go looking for a file manager.
+        """
+        import export
+        from PyQt6.QtCore import QProcess
+        from PyQt6.QtWidgets import QFileDialog, QMenu, QPushButton
+
+        self.window.load(self.source)
+        buttons = self.window.findChildren(QPushButton)
+        self.assertGreater(len(buttons), 10, "expected the whole window's worth")
+
+        chooser, offered = self.chooser()
+        with chooser, \
+                unittest.mock.patch.object(QFileDialog, "getSaveFileName",
+                                           return_value=("", "")), \
+                unittest.mock.patch.object(QMenu, "exec", return_value=None), \
+                unittest.mock.patch.object(export.Exporter, "start"), \
+                unittest.mock.patch.object(QProcess, "startDetached",
+                                           return_value=True):
+            for button in buttons:
+                with self.subTest(button=button.text() or button.objectName()):
+                    button.click()
+                    _app.processEvents()
+
+        # Not just "nothing raised": the doors are stood in for, so a control
+        # handing one of them something the real call would refuse would go
+        # unremarked unless what arrived is checked.
+        self.assertTrue(all(isinstance(folder, str) for folder in offered),
+                        f"the chooser was offered {[type(f).__name__ for f in offered]}")
 
 
 @unittest.skipUnless(REAL_WINDOWS, "needs a real display")

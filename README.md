@@ -310,7 +310,7 @@ since AV1 in software is far too slow at 4K.
 ## Tests
 
 ```sh
-./run-tests.sh           # 379 tests, ~26s (real encodes)
+./run-tests.sh           # 384 tests, ~29s (real encodes)
 ./run-tests.sh --fast    # ~4s, skips anything that invokes ffmpeg
 ./run-tests.sh -v        # one line per test
 ```
@@ -371,13 +371,26 @@ is reverted:
 | the window forgetting its size | caught |
 | the playhead running off a zoomed timeline | caught |
 | a filmstrip that grew without limit | caught |
+| the Open button handing Qt's checked flag to the file chooser | caught |
 
-Three of these were originally *missed* by tests that only looked like they
+Four of these were originally *missed* by tests that only looked like they
 covered the behaviour — one asserted a value was recorded without checking
 anything read it, the second used `endswith` where `"clip..webm"` would have
 passed, and the third raised a timeout by hand and so passed just as happily
-against a probe that would have waited forever. All three are why the sweep is
+against a probe that would have waited forever. All of them are why the sweep is
 worth running rather than assumed.
+
+The fourth is worth its own paragraph, because it reached two releases. Clicking
+**Open…** crashed the app: `clicked` carries a checked flag, PyQt hands a slot as
+many arguments as it will take, and `open_file` had an optional parameter for it
+to land in — so the file chooser was asked to open `False`, and an exception
+inside a slot is fatal in PyQt6. Every test around it called `open_file`
+directly with a string, or replaced it with a mock and asserted it had been
+*called*. The method was covered from every side except the one a user presses.
+There is now a test that clicks the button, and one that clicks every button in
+the window; the stand-in they share records what it was handed and the tests
+check it, since a fake looser than the call it replaces is the trap that hid
+this in the first place.
 
 Window tests need a real display and skip cleanly without one, so the suite is
 green headless.

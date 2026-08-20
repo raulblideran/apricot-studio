@@ -179,7 +179,12 @@ class ApricotStudio(QMainWindow):
 
     def _button(self, text, slot, tooltip="", name="") -> QPushButton:
         b = QPushButton(text)
-        b.clicked.connect(slot)
+        # Swallow the argument rather than connecting the slot straight to
+        # clicked(bool). PyQt hands a slot as many arguments as it will take, so
+        # the checked flag lands in the first optional parameter a slot happens
+        # to have -- and an exception inside a slot is fatal in PyQt6, so that
+        # is a crash rather than a wrong value. Nothing here wants the flag.
+        b.clicked.connect(lambda *_: slot())
         b.setFocusPolicy(Qt.FocusPolicy.NoFocus)  # keep Space for play/pause
         if tooltip:
             b.setToolTip(tooltip)
@@ -533,7 +538,11 @@ class ApricotStudio(QMainWindow):
         self._close_source()
         self._status.setText("")
 
-    def open_file(self, start: str | None = None) -> None:
+    def open_file(self, *, start: str | None = None) -> None:
+        # Keyword-only, so nothing can hand this a positional argument it did
+        # not mean to. Connected to clicked(bool) with `start` positional, it
+        # received False, which is not None, so the default below never ran and
+        # the chooser was asked to open a bool.
         if start is None:
             start = (os.path.dirname(self._info.path) if self._info
                      else os.path.expanduser("~/Videos"))
@@ -571,7 +580,7 @@ class ApricotStudio(QMainWindow):
         if box.clickedButton() is locate:
             # The chooser is the portal's, which runs outside the sandbox, so it
             # can reach the folder this app cannot -- and grants us the file.
-            self.open_file(trouble.folder)
+            self.open_file(start=trouble.folder)
         elif box.clickedButton() is copy:
             # A message box button always closes the box, so the command is in
             # the text above as well: reading it is not worth a second dialog.
