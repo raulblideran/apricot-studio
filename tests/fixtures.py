@@ -114,6 +114,22 @@ def probe_json(path: str) -> dict:
     return json.loads(out or "{}")
 
 
+def reports_stream_titles(path: str) -> bool:
+    """Whether this ffprobe surfaces per-stream titles for this container.
+
+    ffprobe 6.1 does not, for MP4 -- the tags are written and present in the
+    file, and a newer ffprobe reads them straight back, but 6.1 will not report
+    them. Asked of ffprobe directly rather than through media.probe(), so that a
+    genuine regression in our own reading still fails the test instead of
+    quietly skipping it.
+    """
+    out = subprocess.run(
+        [FFPROBE, "-v", "error", "-select_streams", "a",
+         "-show_entries", "stream_tags=title", "-of", "csv=p=0", path],
+        capture_output=True, text=True).stdout
+    return bool(out.strip())
+
+
 def stream(path: str, kind: str = "video") -> dict:
     for s in probe_json(path).get("streams", []):
         if s.get("codec_type") == kind:

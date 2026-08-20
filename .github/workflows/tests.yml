@@ -44,4 +44,7 @@ jobs:
         run: desktop-file-validate flatpak/io.github.raulblideran.ApricotStudio.desktop
 
       - name: Validate the metainfo
-        run: appstreamcli validate io.github.raulblideran.ApricotStudio.metainfo.xml
+        # --no-net because the default run fetches every <url> in the file to
+        # see whether it resolves. That turns a GitHub hiccup into a red build
+        # and tests the internet rather than the document.
+        run: appstreamcli validate --no-net io.github.raulblideran.ApricotStudio.metainfo.xml

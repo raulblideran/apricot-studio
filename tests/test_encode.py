@@ -229,8 +229,14 @@ class AudioSelection(EncodeCase):
         self.assertEqual(fixtures.stream(out)["codec_name"], "h264")
 
     def test_track_titles_are_read_back(self):
-        info = media.probe(fixtures.sample("twoaudio"))
+        path = fixtures.sample("twoaudio")
+        info = media.probe(path)
+        # However the titles fare, every track must be found.
         self.assertEqual(len(info.audio), 2)
+        if not fixtures.reports_stream_titles(path):
+            self.skipTest("this ffprobe does not report per-stream titles for "
+                          "MP4 (6.1 does not, 7+ does); the tags are in the file "
+                          "and the tracks still list as Track 1 and Track 2")
         # The fixture stores a raw PipeWire node name, as the real recorder does.
         self.assertEqual(info.audio[0].title, "Desktop")
         self.assertEqual(info.audio[1].title, "Mic")

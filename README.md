@@ -154,6 +154,13 @@ Defaults inherit everything, so leaving this row alone reproduces the source.
 |---|---|
 | **Format** | *Same as source*, **WebM** (VP9 + Opus), or **GIF** (480px, 15fps, with a palette generated from the clip itself). |
 | **Audio** | Keep, mute, or pick one track when the source has several — a capture with separate desktop and mic tracks lists both. |
+
+Track *names* are read from the file's metadata, and getting them out of an MP4
+needs ffprobe 7 or newer — 6.1 does not report them, though it writes them
+perfectly well. On an older ffmpeg every track is still found and selectable,
+just listed as *Track 1* and *Track 2* rather than *Desktop* and *Mic*. The
+flatpak carries ffmpeg 8, so this only reaches a source install on an older
+distribution, and the test that covers it says so and skips rather than failing.
 | **Quality** | *Same as source*, *Smaller file*, *Smallest worth keeping*, or a size to fit: 10 / 25 / 50 / 100 MB. |
 
 The quality presets scale against **this file's** bitrate rather than some fixed
