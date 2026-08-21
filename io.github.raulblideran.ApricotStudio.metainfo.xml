@@ -75,6 +75,26 @@
   <content_rating type="oars-1.1"/>
 
   <releases>
+    <release version="1.3.0" date="2026-08-21">
+      <description>
+        <p>
+          Apricot Studio has themes. Default is the interface it has always had,
+          unchanged, and Cyberpunk is a dark terminal in crimson and teal with
+          its own typeface, notched buttons and scanlines over the window.
+        </p>
+        <ul>
+          <li>Theme in the header switches the whole look, immediately, and remembers it</li>
+          <li>Cyberpunk owns its colour, so the accent swatch hides while it is on — the accent you chose under Default is kept rather than overwritten, and comes back when you switch back</li>
+          <li>Every colour in a theme is held to the measurements the accent palette always was: readable against its own background, and never close enough to the lossless green or the delete warning to be mistaken for either</li>
+          <li>The timeline is outlined even with no video open, where it used to be a dark rectangle on a dark window with nothing to say it was there</li>
+        </ul>
+        <p>
+          Default is not a re-creation of the old look built out of the new
+          theme code — it runs the same code path it always did, and a test
+          compares a rendered button against a plain Qt one to keep it that way.
+        </p>
+      </description>
+    </release>
     <release version="1.2.0" date="2026-08-20">
       <description>
         <p>

@@ -53,7 +53,7 @@ VIDEO_SUFFIXES = " ".join(f"*{ext}" for ext in sorted(VIDEO_EXTS))
 # The metainfo carries this too, because that is what the flatpak build reads.
 # A test asserts the two agree, so a release cannot go out labelled as the one
 # before it -- which is the mistake this constant exists to make impossible.
-__version__ = "1.2.0"
+__version__ = "1.3.0"
 
 USAGE = """\
 Apricot Studio -- open a video, mark in and out, export the clip.
