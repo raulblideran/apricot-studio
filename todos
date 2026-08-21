@@ -14,3 +14,6 @@
 12. Cap the filmstrip so a long recording cannot fill memory ✅
 13. --version / --help, and a test that the version matches the metainfo ✅
 14. CI: the full suite plus desktop-file and appstream validation ✅
+15. Themes ✅ (Default unchanged + Cyberpunk: Rajdhani, notched chrome,
+    scanlines, hover glitch; the theme owns its palette so the accent
+    picker hides, and the Default accent survives the round trip)

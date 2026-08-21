@@ -707,6 +707,320 @@ class AccentColour(unittest.TestCase):
             self.assertFalse(icon.isNull(), "a colour was offered without a preview")
 
 
+class TimelineOutline(unittest.TestCase):
+    """The border round the timeline, which has to survive the empty state.
+
+    An empty timeline paints its cache and returns early, so anything added to
+    the loaded path alone would simply not be there when it matters most --
+    before a video is open is exactly when the widget needs to say it exists.
+    """
+
+    def setUp(self):
+        import theme
+        from timeline import Timeline
+        self.theme = theme
+        self.tl = Timeline()
+        self.tl.resize(400, 90)
+
+    def corner_pixels(self, image):
+        """The four edge midpoints, where a border must be and content is not."""
+        w, h = image.width(), image.height()
+        return [image.pixelColor(w // 2, 0).name(),
+                image.pixelColor(w // 2, h - 1).name(),
+                image.pixelColor(0, h // 2).name(),
+                image.pixelColor(w - 1, h // 2).name()]
+
+    def test_an_empty_timeline_is_outlined(self):
+        self.tl.set_theme(self.theme.CYBERPUNK)
+        edges = self.corner_pixels(self.tl.grab().toImage())
+        expected = self.theme.CYBERPUNK.timeline.outline
+        self.assertEqual(edges, [expected] * 4,
+                         "the empty timeline has no border to show it is there")
+
+    def test_a_loaded_timeline_keeps_the_outline(self):
+        # Drawn last, so the dimming over the untrimmed ends cannot eat it.
+        self.tl.set_theme(self.theme.CYBERPUNK)
+        self.tl.reset(30.0)
+        self.tl.set_in(10.0)
+        self.tl.set_out(20.0)
+        edges = self.corner_pixels(self.tl.grab().toImage())
+        expected = self.theme.CYBERPUNK.timeline.outline
+        self.assertEqual(edges, [expected] * 4)
+
+    def test_default_is_not_given_one(self):
+        # Default has to stay the widget it was before themes existed.
+        self.tl.set_theme(self.theme.DEFAULT)
+        self.assertIsNone(self.tl._pal.outline)
+        edges = self.corner_pixels(self.tl.grab().toImage())
+        self.assertNotIn(self.theme.CYBERPUNK.timeline.outline, edges)
+
+    def test_the_outline_matches_the_theme_s_other_borders(self):
+        # It is the same edge as every framed control in the window, so the
+        # two are not allowed to drift apart into two different crimsons.
+        t = self.theme.CYBERPUNK
+        self.assertEqual(t.timeline.outline, t.border)
+
+    def test_the_outline_follows_a_theme_switch(self):
+        self.tl.set_theme(self.theme.CYBERPUNK)
+        self.assertIsNotNone(self.tl._pal.outline)
+        self.tl.set_theme(self.theme.DEFAULT)
+        self.assertIsNone(self.tl._pal.outline)
+
+
+class ChamferedChrome(unittest.TestCase):
+    """The custom-painted button, which needs a QApplication but not a window.
+
+    The claim being tested is that Default did not change. ChamferButton is
+    used for every button in the app now, so "it falls through to Qt when the
+    theme has no notch" has to be true in pixels, not just in intent.
+    """
+
+    def setUp(self):
+        import chrome
+        import theme
+        self.chrome = chrome
+        self.theme = theme
+        self.addCleanup(chrome.set_look, theme.DEFAULT, theme.DEFAULT_ACCENT)
+        self.addCleanup(chrome.set_quiet, False)
+
+    @staticmethod
+    def enter(widget):
+        """Qt insists on a real QEnterEvent, positions and all."""
+        from PyQt6.QtCore import QPointF
+        from PyQt6.QtGui import QEnterEvent
+        where = QPointF(widget.width() / 2, widget.height() / 2)
+        widget.enterEvent(QEnterEvent(where, where, where))
+
+    @staticmethod
+    def leave(widget):
+        from PyQt6.QtCore import QEvent
+        widget.leaveEvent(QEvent(QEvent.Type.Leave))
+
+    def button(self, text="Export", name="", w=90, h=28):
+        b = self.chrome.ChamferButton(text)
+        if name:
+            b.setObjectName(name)
+        b.resize(w, h)
+        return b
+
+    def test_default_renders_exactly_like_a_plain_button(self):
+        from PyQt6.QtWidgets import QPushButton
+        self.chrome.set_look(self.theme.DEFAULT, self.theme.DEFAULT_ACCENT)
+        mine = self.button()
+        plain = QPushButton("Export")
+        plain.resize(90, 28)
+        self.assertEqual(mine.grab().toImage(), plain.grab().toImage(),
+                         "the Default theme should not go near the new painter")
+
+    def test_a_chamfered_theme_does_not_render_like_a_plain_button(self):
+        from PyQt6.QtWidgets import QPushButton
+        self.chrome.set_look(self.theme.CYBERPUNK)
+        mine = self.button()
+        plain = QPushButton("Export")
+        plain.resize(90, 28)
+        self.assertNotEqual(mine.grab().toImage(), plain.grab().toImage())
+
+    def test_the_corner_is_actually_cut(self):
+        self.chrome.set_look(self.theme.CYBERPUNK)
+        image = self.button(name="primary").grab().toImage()
+        # The notch is 7px, so a pixel well inside it cannot be the fill that
+        # the middle of the button is painted with.
+        self.assertNotEqual(image.pixel(1, 1), image.pixel(45, 14))
+
+    def test_the_label_is_upper_cased_without_changing_the_button(self):
+        # Qt has no text-transform, so the painter does it -- but text() is
+        # what the rest of the app and the tests read.
+        self.chrome.set_look(self.theme.CYBERPUNK)
+        b = self.button(text="Export")
+        self.assertEqual(b.text(), "Export")
+
+    def test_the_glitch_holds_still_while_an_export_runs(self):
+        self.chrome.set_look(self.theme.CYBERPUNK)
+        self.chrome.set_quiet(True)
+        b = self.button()
+        self.enter(b)
+        self.assertFalse(b._glitching(), "a moving label over a running export")
+
+    def test_an_export_starting_stops_a_glitch_already_running(self):
+        # The case the guard in _glitching() exists for. Checking only that a
+        # *new* hover is refused tests enterEvent and nothing else: the pointer
+        # is usually already on the export button at the moment it is clicked.
+        self.chrome.set_look(self.theme.CYBERPUNK)
+        b = self.button()
+        self.enter(b)
+        self.assertTrue(b._glitching())
+        self.chrome.set_quiet(True)
+        self.assertFalse(b._glitching(), "a label still moving under an export")
+
+    def test_the_glitch_stops_when_the_pointer_leaves(self):
+        self.chrome.set_look(self.theme.CYBERPUNK)
+        b = self.button()
+        self.enter(b)
+        self.assertTrue(b._glitching())
+        self.leave(b)
+        self.assertFalse(b._glitching())
+
+    def test_a_theme_without_a_glitch_never_starts_one(self):
+        self.chrome.set_look(self.theme.DEFAULT, self.theme.DEFAULT_ACCENT)
+        b = self.button()
+        self.enter(b)
+        self.assertFalse(b._glitching())
+
+    def test_a_disabled_button_does_not_glitch(self):
+        self.chrome.set_look(self.theme.CYBERPUNK)
+        b = self.button()
+        b.setEnabled(False)
+        self.enter(b)
+        self.assertFalse(b._glitching())
+
+    def test_it_paints_at_every_size_it_could_be_given(self):
+        self.chrome.set_look(self.theme.CYBERPUNK)
+        for w, h in ((90, 28), (40, 18), (8, 6), (300, 60)):
+            with self.subTest(size=(w, h)):
+                self.button(w=w, h=h).grab()      # must not raise
+
+
+@unittest.skipUnless(REAL_WINDOWS, "needs a real display")
+class Themes(unittest.TestCase):
+    """Switching theme has to reach every part that draws itself.
+
+    The stylesheet is the easy half. The timeline paints with its own palette,
+    the chamfered buttons paint with a module-level one, the scanline overlay
+    exists or does not, and the application font is set programmatically --
+    none of which Qt updates because a sheet was replaced.
+    """
+
+    def setUp(self):
+        import theme
+        from apricot import ApricotStudio
+        self.theme = theme
+        self.window = ApricotStudio()
+        self.window.show()
+        self.addCleanup(self._restore)
+
+    def _restore(self):
+        self.window._apply_theme(self.theme.DEFAULT, self.theme.DEFAULT_ACCENT)
+        self.window._settings.setValue("theme", self.theme.DEFAULT.key)
+        self.window._settings.setValue("accent", self.theme.DEFAULT_ACCENT)
+        dispose(self.window)
+
+    def test_starts_on_default(self):
+        self.assertEqual(self.window._theme.key, "default")
+
+    def test_switching_restyles_the_window(self):
+        self.window._apply_theme("cyberpunk")
+        sheet = self.window.styleSheet()
+        self.assertIn(self.theme.CYBERPUNK.default_accent, sheet)
+        self.assertIn(self.theme.CYBERPUNK.background, sheet)
+        self.assertNotIn(self.theme.DEFAULT.surface, sheet)
+
+    def test_switching_repaints_the_timeline_too(self):
+        # The half that silently keeps the old colours if only the sheet moves.
+        before = self.window._timeline._pal.bg.name()
+        self.window._apply_theme("cyberpunk")
+        after = self.window._timeline._pal.bg.name()
+        self.assertNotEqual(before, after)
+        self.assertEqual(after, self.theme.CYBERPUNK.timeline.bg)
+        self.assertEqual(self.window._timeline._accent.name(),
+                         self.theme.CYBERPUNK.default_accent)
+
+    def test_switching_reaches_the_custom_painted_chrome(self):
+        import chrome
+        self.window._apply_theme("cyberpunk")
+        self.assertEqual(chrome.look()[0].key, "cyberpunk")
+        self.assertEqual(chrome.look()[1], self.theme.CYBERPUNK.default_accent)
+
+    def test_the_picker_is_hidden_when_the_theme_owns_its_colour(self):
+        self.assertTrue(self.window._accent_btn.isVisible())
+        self.window._apply_theme("cyberpunk")
+        self.assertFalse(self.window._accent_btn.isVisible())
+        self.window._apply_theme("default")
+        self.assertTrue(self.window._accent_btn.isVisible())
+
+    def test_a_trip_through_cyberpunk_does_not_lose_the_accent(self):
+        # A theme with its own colour paints it without overwriting the choice
+        # underneath, or every visit would cost the user their accent.
+        self.window._apply_accent("#3d92e0")
+        self.window._apply_theme("cyberpunk")
+        self.assertEqual(self.window._painted_accent,
+                         self.theme.CYBERPUNK.default_accent)
+        self.window._apply_theme("default")
+        self.assertEqual(self.window._accent, "#3d92e0")
+        self.assertIn("#3d92e0", self.window.styleSheet())
+
+    def test_a_round_trip_restores_the_default_look_exactly(self):
+        # The regression that proves adding a theme did not disturb the one
+        # that was already there.
+        before = self.window.styleSheet()
+        timeline_before = self.window._timeline._pal.bg.name()
+        self.window._apply_theme("cyberpunk")
+        self.window._apply_theme("default")
+        self.assertEqual(self.window.styleSheet(), before)
+        self.assertEqual(self.window._timeline._pal.bg.name(), timeline_before)
+
+    def test_the_choice_is_remembered(self):
+        from apricot import ApricotStudio
+        self.window._apply_theme("cyberpunk")
+        again = ApricotStudio()
+        try:
+            self.assertEqual(again._theme.key, "cyberpunk")
+        finally:
+            dispose(again)
+
+    def test_a_corrupt_stored_theme_falls_back(self):
+        from apricot import ApricotStudio
+        self.window._settings.setValue("theme", "not-a-theme")
+        again = ApricotStudio()
+        try:
+            self.assertIs(again._theme, self.theme.DEFAULT)
+        finally:
+            dispose(again)
+
+    def test_the_theme_button_exists_and_never_takes_focus(self):
+        self.assertEqual(self.window._theme_btn.focusPolicy(), Qt.FocusPolicy.NoFocus)
+        self.assertTrue(self.window._theme_btn.isVisible())
+
+    def test_the_overlay_appears_only_for_a_scanline_theme(self):
+        self.assertIsNone(self.window._overlay)
+        self.window._apply_theme("cyberpunk")
+        self.assertIsNotNone(self.window._overlay)
+        self.assertTrue(self.window._overlay.isVisible())
+        # It covers every control, so a click has to pass straight through it.
+        self.assertTrue(self.window._overlay.testAttribute(
+            Qt.WidgetAttribute.WA_TransparentForMouseEvents))
+        self.window._apply_theme("default")
+        self.assertFalse(self.window._overlay.isVisible())
+
+    def test_every_theme_paints_without_error(self):
+        for key in self.theme.THEMES:
+            with self.subTest(theme=key):
+                self.window._apply_theme(key)
+                self.window._timeline.grab()      # must still paint
+                self.window.grab()
+
+    def test_the_bundled_face_reaches_the_application(self):
+        import apricot
+        apricot._FONT_FAMILIES[:] = self.theme.load_fonts()
+        if "Rajdhani" not in apricot._FONT_FAMILIES:
+            self.skipTest("Rajdhani is not bundled in this checkout")
+        self.window._apply_theme("cyberpunk")
+        self.assertEqual(QApplication.instance().font().family(), "Rajdhani")
+        # And the theme without one of its own gives the desktop's font back.
+        self.window._apply_theme("default")
+        self.assertNotEqual(QApplication.instance().font().family(), "Rajdhani")
+
+    def test_a_theme_without_a_face_does_not_need_the_files(self):
+        # A source checkout with no fonts/ still has to render Default.
+        import apricot
+        kept = list(apricot._FONT_FAMILIES)
+        apricot._FONT_FAMILIES.clear()
+        try:
+            self.window._apply_theme("cyberpunk")
+            self.window.grab()
+        finally:
+            apricot._FONT_FAMILIES[:] = kept
+
+
 class TrashFallback(unittest.TestCase):
     """The wastebasket path, written by hand.
 

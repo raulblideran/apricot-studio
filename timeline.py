@@ -31,19 +31,38 @@ SNAP_PX = 7                 # in-point snaps to a keyframe within this many pixe
 MIN_SPAN = 0.25             # don't zoom in past a quarter second
 MAX_THUMBS = 512            # how many filmstrip frames are worth holding
 
-BG = QColor(28, 30, 34)
-FILM_BG = QColor(20, 22, 25)
-WAVE_BG = QColor(24, 26, 30)
-WAVE_FG = QColor(96, 170, 255)
-RULER_BG = QColor(22, 24, 28)
-RULER_FG = QColor(150, 156, 168)
-KEYFRAME = QColor(88, 96, 112)
-KEYFRAME_HOT = QColor(120, 220, 150)
-ACCENT = QColor(theme.DEFAULT_ACCENT)          # replaced per instance
-DIM = QColor(10, 11, 13, 168)
-PLAYHEAD = QColor(255, 255, 255)
-POPUP_BG = QColor(16, 18, 21, 245)
-POPUP_EDGE = QColor(70, 76, 88)
+class Palette:
+    """The timeline's colours for one theme, as QColors ready to paint with.
+
+    The timeline paints itself rather than being styled by Qt, so it has to be
+    handed its colours explicitly. That makes it the half that would otherwise
+    keep the old palette silently through a theme switch, which is why the
+    whole set lives on the instance and none of it is a module constant.
+    """
+
+    __slots__ = ("bg", "film_bg", "wave_bg", "wave_fg", "ruler_bg", "ruler_fg",
+                 "keyframe", "keyframe_hot", "dim", "playhead", "popup_bg",
+                 "popup_edge", "text", "outline")
+
+    def __init__(self, colours: theme.TimelineColours) -> None:
+        self.bg = QColor(colours.bg)
+        self.film_bg = QColor(colours.film_bg)
+        self.wave_bg = QColor(colours.wave_bg)
+        self.wave_fg = QColor(colours.wave_fg)
+        self.ruler_bg = QColor(colours.ruler_bg)
+        self.ruler_fg = QColor(colours.ruler_fg)
+        self.keyframe = QColor(colours.keyframe)
+        self.keyframe_hot = QColor(colours.keyframe_hot)
+        # The two translucent ones: the mask over untrimmed footage, and the
+        # hover popup, which sits over the filmstrip and has to stay readable.
+        self.dim = QColor(colours.dim)
+        self.dim.setAlpha(colours.dim_alpha)
+        self.playhead = QColor(colours.playhead)
+        self.popup_bg = QColor(colours.popup_bg)
+        self.popup_bg.setAlpha(colours.popup_alpha)
+        self.popup_edge = QColor(colours.popup_edge)
+        self.text = QColor(colours.text)
+        self.outline = QColor(colours.outline) if colours.outline else None
 
 # Label steps that read naturally; the first one giving <= ~9 labels wins.
 _STEPS = (0.1, 0.25, 0.5, 1, 2, 5, 10, 15, 30, 60, 120, 300, 600, 900, 1800, 3600)
@@ -84,10 +103,12 @@ class Timeline(QWidget):
         self._keyframes: list[float] = []
         self._cache: QPixmap | None = None
         self._drag: str | None = None
-        # Follows the user's accent; the grip colour is derived so the
-        # handle stays legible whatever colour is chosen.
-        self._accent = QColor(theme.DEFAULT_ACCENT)
-        self._grip = QColor(theme.on_accent(theme.DEFAULT_ACCENT))
+        # Follows the user's theme and accent; the grip colour is derived so
+        # the handle stays legible whatever colour is chosen.
+        self._theme = theme.DEFAULT
+        self._pal = Palette(theme.DEFAULT.timeline)
+        self._accent = QColor(theme.DEFAULT.default_accent)
+        self._grip = QColor(theme.on_accent(theme.DEFAULT.default_accent))
         self._snapped = False
 
         # Visible range. Starts as the whole file.
@@ -95,8 +116,15 @@ class Timeline(QWidget):
         self._view_end = 0.0
         self._hover_x: float | None = None
 
-    def set_accent(self, colour: str) -> None:
-        colour = theme.normalise(colour)
+    def set_theme(self, thm: theme.Theme, colour: str | None = None) -> None:
+        """Repaint in another theme. The cache holds colours, so it goes too."""
+        self._theme = thm
+        self._pal = Palette(thm.timeline)
+        self._cache = None
+        self.set_accent(colour)
+
+    def set_accent(self, colour: str | None) -> None:
+        colour = self._theme.normalise(colour)
         self._accent = QColor(colour)
         self._grip = QColor(theme.on_accent(colour))
         self.update()
@@ -292,7 +320,7 @@ class Timeline(QWidget):
         ratio = self.devicePixelRatioF()
         pix = QPixmap(int(self.width() * ratio), int(self.height() * ratio))
         pix.setDevicePixelRatio(ratio)
-        pix.fill(BG)
+        pix.fill(self._pal.bg)
         p = QPainter(pix)
         p.setRenderHint(QPainter.RenderHint.Antialiasing, False)
 
@@ -301,9 +329,9 @@ class Timeline(QWidget):
         wave = QRect(PAD, FILM_H, track, WAVE_H)
         ruler = QRect(PAD, FILM_H + WAVE_H, track, RULER_H)
 
-        p.fillRect(film, FILM_BG)
-        p.fillRect(wave, WAVE_BG)
-        p.fillRect(ruler, RULER_BG)
+        p.fillRect(film, self._pal.film_bg)
+        p.fillRect(wave, self._pal.wave_bg)
+        p.fillRect(ruler, self._pal.ruler_bg)
 
         self._paint_film(p, film)
         self._paint_wave(p, wave, track)
@@ -341,7 +369,7 @@ class Timeline(QWidget):
     def _paint_wave(self, p: QPainter, wave: QRect, track: int) -> None:
         if not self._peaks or self._duration <= 0:
             return
-        p.setPen(QPen(WAVE_FG, 1))
+        p.setPen(QPen(self._pal.wave_fg, 1))
         mid = wave.center().y() + 0.5
         half = wave.height() / 2 - 1
         n = len(self._peaks)
@@ -360,7 +388,7 @@ class Timeline(QWidget):
             spacing = (self._x_of(self._keyframes[1]) - self._x_of(self._keyframes[0])
                        if len(self._keyframes) > 1 else 0)
             hot = spacing > 14
-            p.setPen(QPen(KEYFRAME_HOT if hot else KEYFRAME, 1))
+            p.setPen(QPen(self._pal.keyframe_hot if hot else self._pal.keyframe, 1))
             last = -99.0
             for t in self._keyframes:
                 x = self._x_of(t)
@@ -369,7 +397,7 @@ class Timeline(QWidget):
                 last = x
                 p.drawLine(QPointF(x, ruler.top()), QPointF(x, ruler.top() + (6 if hot else 4)))
 
-        p.setPen(QPen(RULER_FG, 1))
+        p.setPen(QPen(self._pal.ruler_fg, 1))
         font = p.font()
         font.setPointSizeF(max(7.5, font.pointSizeF() - 1.5))
         p.setFont(font)
@@ -394,6 +422,7 @@ class Timeline(QWidget):
         p.drawPixmap(0, 0, self._cache)
 
         if self._duration <= 0:
+            self._draw_outline(p)
             p.end()
             return
 
@@ -403,9 +432,9 @@ class Timeline(QWidget):
 
         # Everything outside the selection recedes.
         if x_in > 0:
-            p.fillRect(QRectF(0, 0, x_in, h), DIM)
+            p.fillRect(QRectF(0, 0, x_in, h), self._pal.dim)
         if x_out < self.width():
-            p.fillRect(QRectF(x_out, 0, self.width() - x_out, h), DIM)
+            p.fillRect(QRectF(x_out, 0, self.width() - x_out, h), self._pal.dim)
 
         p.setRenderHint(QPainter.RenderHint.Antialiasing, True)
         p.setPen(QPen(self._accent, 1))
@@ -420,18 +449,36 @@ class Timeline(QWidget):
         # Playhead last so it always reads on top.
         x_pos = self._x_of(self._position)
         if -1 <= x_pos <= self.width() + 1:
-            p.setPen(QPen(PLAYHEAD, 1))
+            p.setPen(QPen(self._pal.playhead, 1))
             p.drawLine(QPointF(x_pos, 0), QPointF(x_pos, h))
             head = QPainterPath()
             head.moveTo(x_pos - 5, 0)
             head.lineTo(x_pos + 5, 0)
             head.lineTo(x_pos, 7)
             head.closeSubpath()
-            p.fillPath(head, PLAYHEAD)
+            p.fillPath(head, self._pal.playhead)
 
         if self._hover_x is not None and self._drag is None:
             self._draw_hover(p)
+        self._draw_outline(p)
         p.end()
+
+    def _draw_outline(self, p: QPainter) -> None:
+        """A border round the widget, drawn in every state including empty.
+
+        Loaded, the filmstrip gives the timeline an edge of its own. Empty, it
+        is a dark rectangle on a dark window, and on a theme built out of
+        outlines there was nothing to say it was there at all.
+
+        Drawn last so the dimming over the untrimmed ends cannot eat it, and
+        with antialiasing off so a one-pixel border stays one pixel.
+        """
+        if self._pal.outline is None:
+            return
+        p.setRenderHint(QPainter.RenderHint.Antialiasing, False)
+        p.setPen(QPen(self._pal.outline, 1))
+        p.setBrush(Qt.BrushStyle.NoBrush)
+        p.drawRect(0, 0, self.width() - 1, self.height() - 1)
 
     def _draw_handle(self, p: QPainter, x: float, left: bool) -> None:
         h = self.height()
@@ -461,12 +508,12 @@ class Timeline(QWidget):
 
         path = QPainterPath()
         path.addRoundedRect(QRectF(x, y, box_w, box_h), 4, 4)
-        p.fillPath(path, POPUP_BG)
-        p.setPen(QPen(POPUP_EDGE, 1))
+        p.fillPath(path, self._pal.popup_bg)
+        p.setPen(QPen(self._pal.popup_edge, 1))
         p.drawPath(path)
         if image is not None:
             p.drawImage(QRectF(x + (box_w - tw) / 2, y + pad, tw, th), image)
-        p.setPen(QPen(QColor(230, 232, 236), 1))
+        p.setPen(QPen(self._pal.text, 1))
         p.drawText(QRectF(x, y + box_h - text_h - pad, box_w, text_h),
                    int(Qt.AlignmentFlag.AlignCenter), label)
 

@@ -27,7 +27,8 @@ from urllib.parse import quote
 
 from PyQt6.QtCore import (QByteArray, QEvent, QProcess, QSettings, Qt, QTimer,
                           QUrl, pyqtSlot)
-from PyQt6.QtGui import QColor, QDesktopServices, QIcon, QPainter, QPixmap
+from PyQt6.QtGui import (QColor, QDesktopServices, QFont, QIcon, QPainter,
+                         QPixmap)
 from PyQt6.QtMultimedia import QAudioOutput, QMediaPlayer
 from PyQt6.QtMultimediaWidgets import QVideoWidget
 from PyQt6.QtWidgets import (QApplication, QCheckBox, QComboBox, QFileDialog,
@@ -35,6 +36,7 @@ from PyQt6.QtWidgets import (QApplication, QCheckBox, QComboBox, QFileDialog,
                              QMenu, QMessageBox, QProgressBar, QPushButton,
                              QSizePolicy, QVBoxLayout, QWidget)
 
+import chrome
 import export
 import sandbox
 import theme
@@ -126,6 +128,12 @@ def delete_prompt(record: Exported, source_bytes: int) -> tuple[str, str]:
     return text, detail
 
 
+# Families Qt actually accepted from the bundled files, filled in by main()
+# before any window exists. Empty means the files were missing and the
+# stylesheet's fallback stack is carrying the theme instead.
+_FONT_FAMILIES: list[str] = []
+
+
 class ApricotStudio(QMainWindow):
     def __init__(self, path: str | None = None):
         super().__init__()
@@ -141,6 +149,13 @@ class ApricotStudio(QMainWindow):
         self._last_output: str | None = None
         self._exported: Exported | None = None
         self._settings = QSettings("ApricotStudio", "ApricotStudio")
+        # Qt's own font, kept so switching back to a theme without one of its
+        # own restores what the desktop asked for rather than a guess.
+        self._base_font: QFont | None = None
+        self._overlay: chrome.ScanlineOverlay | None = None
+        # What is actually on screen. Differs from _accent whenever the active
+        # theme owns its colour.
+        self._painted_accent = theme.DEFAULT_ACCENT
         self._migrate_settings()
         self._restore_geometry()
 
@@ -168,17 +183,24 @@ class ApricotStudio(QMainWindow):
         self._exporter.progress.connect(self._on_export_progress)
         self._exporter.finished.connect(self._on_export_finished)
 
+        self._theme = theme.get(
+            self._settings.value("theme", theme.DEFAULT.key, type=str))
         self._accent = theme.normalise(
             self._settings.value("accent", theme.DEFAULT_ACCENT, type=str))
+        # Before _build_ui, so the first paint of every custom-drawn widget
+        # already has the right theme rather than flashing the default one.
+        chrome.set_look(self._theme, self._accent)
         self._build_ui()
-        self._apply_accent(self._accent, save=False)
+        self._apply_theme(self._theme, self._accent, save=False)
         self._set_loaded(False)
         QApplication.instance().installEventFilter(self)
 
     # ----- construction -------------------------------------------------
 
     def _button(self, text, slot, tooltip="", name="") -> QPushButton:
-        b = QPushButton(text)
+        # ChamferButton is a plain QPushButton unless the theme asks for a
+        # notch, so this is the whole of the wiring for the custom chrome.
+        b = chrome.ChamferButton(text)
         # Swallow the argument rather than connecting the slot straight to
         # clicked(bool). PyQt hands a slot as many arguments as it will take, so
         # the checked flag lands in the first optional parameter a slot happens
@@ -223,10 +245,13 @@ class ApricotStudio(QMainWindow):
                                        "Unload this video (Ctrl+W)")
         self._accent_btn = self._button("", self._choose_accent,
                                         "Accent colour", "swatch")
+        self._theme_btn = self._button("Theme ▾", self._choose_theme,
+                                       "Appearance")
         header.addWidget(self._open_btn)
         header.addWidget(self._recent_btn)
         header.addSpacing(6)
         header.addLayout(titles, 1)
+        header.addWidget(self._theme_btn)
         header.addWidget(self._accent_btn)
         header.addWidget(self._close_btn)
         outer.addLayout(header)
@@ -238,7 +263,7 @@ class ApricotStudio(QMainWindow):
         transport.setSpacing(8)
         self._play_btn = self._button("▶  Play", self.toggle_play, "Space")
         self._clock = QLabel("00:00:00.000 / 00:00:00.000")
-        self._clock.setStyleSheet("font-family: monospace;")
+        self._clock.setObjectName("clock")
         transport.addWidget(self._play_btn)
         transport.addWidget(self._clock)
         transport.addStretch(1)
@@ -433,6 +458,15 @@ class ApricotStudio(QMainWindow):
         painter.end()
         return QIcon(pixmap)
 
+    def _choose_theme(self) -> None:
+        menu = QMenu(self)
+        for thm in theme.THEMES.values():
+            action = menu.addAction(thm.name)
+            action.setCheckable(True)
+            action.setChecked(thm.key == self._theme.key)
+            action.triggered.connect(lambda _=False, k=thm.key: self._apply_theme(k))
+        menu.exec(self._theme_btn.mapToGlobal(self._theme_btn.rect().bottomLeft()))
+
     def _choose_accent(self) -> None:
         menu = QMenu(self)
         for name, colour in theme.ACCENTS:
@@ -444,15 +478,85 @@ class ApricotStudio(QMainWindow):
 
     def _apply_accent(self, colour: str, save: bool = True) -> None:
         """Restyle everything around a new accent, and remember it."""
-        self._accent = theme.normalise(colour)
-        self.setStyleSheet(theme.stylesheet(self._accent))
-        self._timeline.set_accent(self._accent)
+        self._apply_theme(self._theme, colour, save=save)
+
+    def _apply_theme(self, thm, colour: str | None = None,
+                     save: bool = True) -> None:
+        """Restyle everything around a theme and accent, and remember both.
+
+        The single choke point: anything that a switch has to reach goes here,
+        because a second path is how the timeline or the overlay ends up still
+        wearing the previous theme.
+        """
+        self._theme = thm if isinstance(thm, theme.Theme) else theme.get(thm)
+        if colour is not None:
+            # The user's preference, kept under Default's rules rather than
+            # the current theme's. A theme with no palette of its own paints
+            # its own colour but must not *overwrite* the choice underneath:
+            # going Default -> Cyberpunk -> Default has to come back to the
+            # accent that was picked, not to Night City yellow.
+            self._accent = theme.normalise(colour)
+        painted = self._theme.normalise(self._accent)
+
+        chrome.set_look(self._theme, painted)
+        self._apply_font()
+        self.setStyleSheet(theme.stylesheet(self._theme, painted))
+        self._timeline.set_theme(self._theme, painted)
+
+        self._painted_accent = painted
+        # A theme with its own colour has nothing for the picker to offer.
+        self._accent_btn.setVisible(bool(self._theme.accents))
+        self._sync_overlay()
+
         if save:
+            self._settings.setValue("theme", self._theme.key)
             self._settings.setValue("accent", self._accent)
-        # The badge swaps objectName between accent and lossless colours, so it
-        # needs re-polishing whenever the sheet is replaced.
-        self._badge.style().unpolish(self._badge)
-        self._badge.style().polish(self._badge)
+
+        # Qt caches the resolved style per widget, so replacing the sheet is
+        # not enough on its own. The accent change only ever needed the badge,
+        # which swaps objectName between accent and lossless colours; a theme
+        # changes fonts and metrics on everything, so everything is repolished.
+        for widget in self.findChildren(QWidget):
+            widget.style().unpolish(widget)
+            widget.style().polish(widget)
+        self.style().unpolish(self)
+        self.style().polish(self)
+        self.update()
+
+    def _apply_font(self) -> None:
+        """Put the theme's typeface on the application.
+
+        The stylesheet carries the family too, but painted text -- the
+        timeline's ruler, the chamfered buttons -- reads the widget font
+        instead, and would otherwise keep the previous theme's face.
+        """
+        app = QApplication.instance()
+        if app is None:
+            return
+        if self._base_font is None:
+            self._base_font = QFont(app.font())
+        if self._theme.font_family and self._theme.font_family in _FONT_FAMILIES:
+            font = QFont(self._theme.font_family)
+            font.setPointSizeF(self._base_font.pointSizeF())
+            app.setFont(font)
+        else:
+            app.setFont(self._base_font)
+
+    def _sync_overlay(self) -> None:
+        """Scanlines exist only while a theme wants them."""
+        if self._theme.scanlines:
+            if self._overlay is None:
+                self._overlay = chrome.ScanlineOverlay(self.centralWidget())
+            self._overlay.setGeometry(self.centralWidget().rect())
+            self._overlay.show()
+            self._overlay.raise_()
+        elif self._overlay is not None:
+            self._overlay.hide()
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        if self._overlay is not None and self.centralWidget() is not None:
+            self._overlay.setGeometry(self.centralWidget().rect())
 
     def _restore_geometry(self) -> None:
         """Come back the size the window was left at.
@@ -925,6 +1029,7 @@ class ApricotStudio(QMainWindow):
         self._export_btn.setEnabled(False)
         self._status.setText("Copying…" if plan.lossless
                              else f"Encoding with {plan.label}…")
+        chrome.set_quiet(True)
         self._exporter.start(plan)
 
     def _on_export_progress(self, fraction: float, speed: float, eta: float) -> None:
@@ -937,6 +1042,7 @@ class ApricotStudio(QMainWindow):
         self._status.setText("  ·  ".join(parts))
 
     def _on_export_finished(self, ok: bool, message: str) -> None:
+        chrome.set_quiet(False)
         self._progress.setVisible(False)
         self._cancel_btn.setVisible(False)
         self._export_btn.setEnabled(True)
@@ -1321,6 +1427,10 @@ def main() -> int:
         return answered
 
     app = QApplication(sys.argv)
+    # Before any widget exists, so the first theme applied can already use the
+    # face. QFontDatabase needs the application, which is why it is not done
+    # at import time.
+    _FONT_FAMILIES[:] = theme.load_fonts()
     app.setApplicationName("Apricot Studio")
     app.setApplicationDisplayName("Apricot Studio")
     # Lets Wayland match the window to the installed .desktop entry, so the task

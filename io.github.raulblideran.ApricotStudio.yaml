@@ -147,6 +147,15 @@ modules:
       - install -Dm644 sandbox.py -t /app/share/apricot-studio/
       - install -Dm644 timeline.py -t /app/share/apricot-studio/
       - install -Dm644 theme.py -t /app/share/apricot-studio/
+      - install -Dm644 chrome.py -t /app/share/apricot-studio/
+      # Rajdhani, the Cyberpunk theme's typeface. theme.load_fonts() reads them
+      # from beside the modules, so they go in the app's own directory rather
+      # than /app/share/fonts -- nothing outside this app should see them.
+      - install -Dm644 fonts/Rajdhani-Regular.ttf -t /app/share/apricot-studio/fonts/
+      - install -Dm644 fonts/Rajdhani-Medium.ttf -t /app/share/apricot-studio/fonts/
+      - install -Dm644 fonts/Rajdhani-SemiBold.ttf -t /app/share/apricot-studio/fonts/
+      - install -Dm644 fonts/Rajdhani-Bold.ttf -t /app/share/apricot-studio/fonts/
+      - install -Dm644 fonts/OFL.txt -t /app/share/apricot-studio/fonts/
       - install -Dm755 flatpak/apricot-studio -t /app/bin/
       - install -Dm644 io.github.raulblideran.ApricotStudio.svg
         -t /app/share/icons/hicolor/scalable/apps/

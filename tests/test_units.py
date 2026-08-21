@@ -303,3 +303,164 @@ class TheApplicationIcon(unittest.TestCase):
                                  "Qt's renderer does not honour this")
         attributes = {name for element in tree.iter() for name in element.attrib}
         self.assertNotIn("clip-path", attributes)
+
+
+class ChamferGeometry(unittest.TestCase):
+    """The notched button outline, checked without needing a window.
+
+    Qt stylesheets cannot cut a corner, so the shape is computed and painted by
+    hand. That makes it ordinary geometry, and ordinary geometry is worth
+    pinning down: a notch that escapes the widget draws over its neighbour, and
+    one that swallows the whole button leaves nothing to click.
+    """
+
+    def shape(self, w=80.0, h=26.0, cut=7.0):
+        import chrome
+        return [(p.x(), p.y()) for p in chrome.chamfer_polygon(w, h, cut)]
+
+    def test_it_is_a_hexagon(self):
+        # Four corners, two of them cut into two points each.
+        self.assertEqual(len(self.shape()), 6)
+
+    def test_every_point_stays_inside_the_widget(self):
+        for x, y in self.shape():
+            self.assertGreaterEqual(x, 0)
+            self.assertGreaterEqual(y, 0)
+            self.assertLessEqual(x, 80.0)
+            self.assertLessEqual(y, 26.0)
+
+    def test_the_cut_corners_are_actually_missing(self):
+        points = self.shape()
+        self.assertNotIn((0.0, 0.0), points, "top-left should be cut")
+        self.assertNotIn((80.0, 26.0), points, "bottom-right should be cut")
+        # ...and the other two are still square.
+        self.assertIn((80.0, 0.0), points)
+        self.assertIn((0.0, 26.0), points)
+
+    def test_the_cut_is_the_size_asked_for(self):
+        self.assertIn((7.0, 0.0), self.shape())
+        self.assertIn((0.0, 7.0), self.shape())
+
+    def test_a_notch_larger_than_the_button_is_clamped(self):
+        # Otherwise the polygon folds through itself and paints a bow tie.
+        points = self.shape(w=10.0, h=6.0, cut=40.0)
+        self.assertEqual(len(points), 6)
+        for x, y in points:
+            self.assertGreaterEqual(x, 0)
+            self.assertGreaterEqual(y, 0)
+            self.assertLessEqual(x, 10.0)
+            self.assertLessEqual(y, 6.0)
+
+    def test_no_cut_gives_the_plain_rectangle_back(self):
+        self.assertEqual(
+            set(self.shape(cut=0.0)),
+            {(0.0, 0.0), (80.0, 0.0), (80.0, 26.0), (0.0, 26.0)})
+
+    def test_a_negative_cut_is_not_a_bulge(self):
+        self.assertEqual(set(self.shape(cut=-5.0)), set(self.shape(cut=0.0)))
+
+
+class ScanlineLegibility(unittest.TestCase):
+    """The decoration is not allowed to cost readability.
+
+    Scanlines sit over the whole window, including every timecode in it. This
+    is the test that stops someone deepening them until the interface is
+    atmospheric and unusable.
+    """
+
+    def test_every_colour_survives_the_overlay(self):
+        import chrome
+        import theme
+        t = theme.CYBERPUNK
+        for name in ("text", "text_dim", "default_accent", "lossless",
+                     "destructive", "destructive_text"):
+            ratio = chrome.overlay_contrast(getattr(t, name), t.background)
+            with self.subTest(colour=name):
+                self.assertGreaterEqual(
+                    ratio, 4.5,
+                    f"{name} drops to {ratio:.2f}:1 under the scanlines")
+
+    def test_the_overlay_only_ever_darkens(self):
+        import chrome
+        import theme
+        t = theme.CYBERPUNK
+        self.assertLessEqual(chrome.overlay_contrast(t.text, t.background),
+                             theme.contrast(t.text, t.background))
+
+    def test_the_lines_leave_most_of_the_picture_alone(self):
+        # One row in three at ~10% is a texture; every row at 50% is a blind.
+        import chrome
+        self.assertGreaterEqual(chrome.SCANLINE_GAP, 2)
+        self.assertLessEqual(chrome.SCANLINE_ALPHA, 64)
+
+    def test_the_lines_are_actually_visible(self):
+        """The other half of the bargain, and the easier one to get wrong.
+
+        Drawn dark -- the obvious implementation -- a scanline over a #0a0d0e
+        window moves the pixel by one value out of 255. Every contrast test
+        still passes, because an invisible overlay cannot hurt readability, and
+        the feature simply does not exist. So the line has to be measured for
+        presence as well as for restraint.
+        """
+        import chrome
+        import theme
+        line = chrome.SCANLINE_COLOUR.name()
+        share = chrome.SCANLINE_ALPHA / 255
+        for t in theme.THEMES.values():
+            if not t.scanlines:
+                continue
+            lit = theme.mix(t.background, line, share)
+            moved = max(abs(a - b) for a, b in
+                        zip(theme._rgb(lit), theme._rgb(t.background)))
+            with self.subTest(theme=t.key):
+                self.assertGreaterEqual(
+                    moved, 8,
+                    f"a scanline on {t.key} shifts the pixel by {moved}/255 -- "
+                    "the effect would not be visible")
+
+
+class ThePackaging(unittest.TestCase):
+    """Everything the app imports has to be in the Flatpak manifest.
+
+    The manifest installs each file by name, so a new module works perfectly
+    from a source checkout and is simply absent from the bundle. The failure is
+    an ImportError on someone else's machine, which is the worst place to find
+    out.
+    """
+
+    def setUp(self):
+        self.root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        with open(os.path.join(
+                self.root, "io.github.raulblideran.ApricotStudio.yaml")) as f:
+            self.manifest = f.read()
+
+    def test_every_module_is_installed(self):
+        import glob
+        for path in sorted(glob.glob(os.path.join(self.root, "*.py"))):
+            name = os.path.basename(path)
+            with self.subTest(module=name):
+                self.assertIn(f"install -Dm644 {name} ", self.manifest,
+                              f"{name} would be missing from the bundle")
+
+    def test_every_bundled_font_is_installed(self):
+        import glob
+        fonts = sorted(glob.glob(os.path.join(self.root, "fonts", "*.ttf")))
+        self.assertTrue(fonts, "the Cyberpunk theme ships a typeface")
+        for path in fonts:
+            name = os.path.basename(path)
+            with self.subTest(font=name):
+                self.assertIn(f"fonts/{name} ", self.manifest)
+
+    def test_the_font_licence_travels_with_the_fonts(self):
+        # OFL-1.1 requires the licence to be distributed with the faces.
+        self.assertTrue(os.path.exists(
+            os.path.join(self.root, "fonts", "OFL.txt")))
+        self.assertIn("fonts/OFL.txt ", self.manifest)
+
+    def test_the_files_theme_expects_are_the_files_that_are_there(self):
+        import theme
+        for name in theme.FONT_FILES:
+            with self.subTest(font=name):
+                self.assertTrue(
+                    os.path.exists(os.path.join(theme.FONT_DIR, name)),
+                    f"theme.py asks for {name} and it is not in fonts/")

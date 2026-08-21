@@ -19,76 +19,56 @@ Download `apricot-studio.flatpak` from the
 flatpak install --user apricot-studio.flatpak
 ```
 
-Nothing else is required — no Python, no PyQt6, no ffmpeg. The bundle carries
-its own ffmpeg built with libx264 and libx265, and Qt comes from the KDE
-runtime.
+No Python, PyQt6 or ffmpeg needed — the bundle carries its own ffmpeg built with
+libx264 and libx265. Qt comes from `org.kde.Platform//6.11`, shared with any other
+KDE Flatpak you have.
 
-The bundle is 16 MB because it holds only the app. It needs
-`org.kde.Platform//6.11`, which is about 1.1 GB. If you already run any KDE
-Flatpak — kdenlive, Haruna — you have it and the install is instant. Otherwise
-Flatpak fetches it once, and every KDE app afterwards shares it.
-
-### Building the Flatpak yourself
+### Building it yourself
 
 ```sh
 flatpak install --user flathub org.flatpak.Builder org.kde.Sdk//6.11
 
 flatpak run org.flatpak.Builder --user --force-clean --install \
     --repo=repo build-dir io.github.raulblideran.ApricotStudio.yaml
-```
 
-That installs it locally. To produce a bundle to give to someone else:
-
-```sh
 flatpak build-bundle --runtime-repo=https://flathub.org/repo/flathub.flatpakrepo \
     repo apricot-studio.flatpak io.github.raulblideran.ApricotStudio master
 ```
 
 **`--runtime-repo` is not optional.** Without it the bundle names the runtime it
-needs but not where to find it, so it installs fine for anyone who already has
-that runtime and fails for everyone else — which is easy to miss when testing on
-a machine that has it. With the flag, Flatpak offers to add Flathub and fetch
-the runtime itself.
+needs but not where to find it, so it installs for anyone who already has that
+runtime and fails for everyone else — easy to miss when testing on a machine that
+has it.
 
-The first build compiles x264, x265 and ffmpeg, so expect several minutes.
-Rebuilds after a code change take seconds: those modules are cached and only the
-app module runs again.
+The first build compiles x264, x265 and ffmpeg; rebuilds take seconds.
 
 ### Straight from the source tree
 
 ```sh
-./install.sh
+./install.sh              # --uninstall to remove
 ```
 
-Everything lands under `~/.local`, so nothing touches the rpm-ostree base image
-and it survives Bazzite updates. It uses the system `ffmpeg` and the system
-PyQt6, which Bazzite already ships — no pip, no venv, no layered packages.
-Remove it with `./install.sh --uninstall`.
-
-**Do not run both at once.** They share a desktop ID, and the flatpak's export
-directory comes first in `XDG_DATA_DIRS`, so the flatpak wins in the app menu
-while `apricot-studio` in a terminal still runs the source tree. Pick one.
+Everything lands under `~/.local`, using the system ffmpeg and PyQt6 that Bazzite
+already ships. **Do not run both installs at once** — they share a desktop ID, so
+the flatpak wins in the app menu while `apricot-studio` in a terminal runs the
+source tree.
 
 ## Why the Flatpak is GPL
 
-The KDE runtime's ffmpeg is built without libx264 and libx265, because those are
-GPL. H.264 is what screen recorders produce and therefore what this app spends
-its time on, so the manifest builds x264, x265 and ffmpeg from source. Linking
-them is what makes the bundle **GPL-3.0-or-later**; the alternative was falling
-back to `h264_vaapi`, which is measurably worse at the same bitrate and needs a
-GPU that can encode H.264 at all.
+The KDE runtime's ffmpeg omits libx264 and libx265 because they are GPL, and H.264
+is what screen recorders produce. The manifest builds x264, x265 and ffmpeg from
+source, making the bundle **GPL-3.0-or-later**. The alternative, `h264_vaapi`, is
+measurably worse at the same bitrate.
 
-Three details worth recording, since each cost a build to find:
+Three build details, each of which cost a build to find:
 
-- x265 sets CMake policies `CMP0025` and `CMP0054` to `OLD`, which CMake 4 — what
-  the Sdk ships — refuses outright. The manifest patches them to `NEW`.
+- x265 sets CMake policies `CMP0025` and `CMP0054` to `OLD`, which CMake 4 refuses.
+  The manifest patches them to `NEW`.
 - SVT-AV1 3.x changed `svt_av1_enc_init_handle` from three arguments to two, so
   ffmpeg 7.x will not compile against the runtime. The manifest uses ffmpeg 8.0.
-- PyQt6 is installed from its wheel with `--no-deps`, deliberately skipping
-  `PyQt6-Qt6`. The bindings bundle no Qt of their own, so they bind to the
-  runtime's. But Qt then looks for its plugins inside the PyQt6 package, which
-  is empty — without `QT_PLUGIN_PATH` pointing at the runtime there is no
-  platform plugin and the window never opens.
+- PyQt6 installs with `--no-deps`, skipping `PyQt6-Qt6` so it binds to the
+  runtime's Qt. Qt then looks for plugins inside the empty PyQt6 package, so
+  `QT_PLUGIN_PATH` must point at the runtime or no window opens.
 
 ## Use
 
@@ -117,34 +97,28 @@ You can also drop a video onto the window, or pick one from **Recent**.
 | `Ctrl`+`Enter` | export |
 | `Esc` | cancel a running export |
 
-Drag the orange handles to set in and out, drag anywhere else to scrub, or type
-an exact timecode into the In/Out boxes. Hovering shows the frame under the
-cursor. The wheel zooms, `Shift`+wheel pans, double-click toggles zoom. Zoomed
-in, the view pages along to keep up with playback. Clicking the picture pauses.
-The window reopens at the size you left it.
+Drag the handles to set in and out, drag elsewhere to scrub, or type a timecode
+into the In/Out boxes. The wheel zooms, `Shift`+wheel pans, double-click toggles
+zoom. Hovering shows the frame under the cursor. The window reopens at the size
+you left it.
 
-The timeline shows a filmstrip, an audio waveform (the spikes are usually the
-moment you want) and ticks marking the source's keyframes. **Green ticks are
-free cut points** — see below.
+The timeline shows a filmstrip, an audio waveform and ticks marking the source's
+keyframes. **Green ticks are free cut points.**
 
-**Folder** and **Name** are separate fields. The name is yours: it is suggested
-once when you open a file and then left alone, including after a render, so you
-can export, tweak the selection and export again without retyping it. If that
-would overwrite an existing clip you are asked first. **Show in folder** appears
-after an export, and **Close** unloads the file without touching it.
+**Folder** and **Name** are separate fields. The name is suggested once and then
+left alone, including after a render, so you can export, tweak and export again
+without retyping it. You are asked before overwriting.
 
 ## Instant, lossless cuts
 
-If the in-point lands exactly on a keyframe, nothing has to be decoded: the clip
-is stream-copied straight out of the source. Press `S` (or drag the in-handle
-near a tick — it snaps, and `Alt` overrides) and the badge turns green.
+If the in-point lands exactly on a keyframe nothing has to be decoded — the clip is
+stream-copied out of the source. Press `S`, or drag the in-handle near a tick (it
+snaps; `Alt` overrides), and the badge turns green.
 
-Measured on a 1440p60 replay: **0.14 s instead of 9.2 s**, with the video stream
-coming out **bit-identical** to the source (verified by MD5), and both streams
-starting at exactly 0.000. The cost is that the in-point moves to the keyframe,
-at most one GOP — 2 seconds on these files. The out-point stays exact either way.
-
-The badge always says which path you are on, so it is never a surprise.
+Measured on a 1440p60 replay: **0.14 s instead of 9.2 s**, video **bit-identical**
+to the source. The cost is the in-point moving to the keyframe, at most one GOP —
+2 seconds on these files. The out-point stays exact either way, and the badge
+always says which path you are on.
 
 ## The few things you can change
 
@@ -152,83 +126,54 @@ Defaults inherit everything, so leaving this row alone reproduces the source.
 
 | Control | What it does |
 |---|---|
-| **Format** | *Same as source*, **WebM** (VP9 + Opus), or **GIF** (480px, 15fps, with a palette generated from the clip itself). |
+| **Format** | *Same as source*, **WebM** (VP9 + Opus), or **GIF** (480px, 15fps, palette generated from the clip itself). |
 | **Audio** | Keep, mute, or pick one track when the source has several — a capture with separate desktop and mic tracks lists both. |
-
-Track *names* are read from the file's metadata, and getting them out of an MP4
-needs ffprobe 7 or newer — 6.1 does not report them, though it writes them
-perfectly well. On an older ffmpeg every track is still found and selectable,
-just listed as *Track 1* and *Track 2* rather than *Desktop* and *Mic*. The
-flatpak carries ffmpeg 8, so this only reaches a source install on an older
-distribution, and the test that covers it says so and skips rather than failing.
 | **Quality** | *Same as source*, *Smaller file*, *Smallest worth keeping*, or a size to fit: 10 / 25 / 50 / 100 MB. |
 
-The quality presets scale against **this file's** bitrate rather than some fixed
-number, so *Smaller file* means about half of whatever you opened — the same
-preset behaves sensibly on a 720p capture and a 4K one. Hover any entry for what
-it does. The badge shows the estimated size for your current selection and
-updates as you drag; for a size target and for the source-format presets it
-lands within 3% of real encodes. WebM is looser, because VP9 is driven by
-quality rather than by a rate, so what comes out follows the footage.
+Presets scale against **this file's** bitrate rather than a fixed number, so
+*Smaller file* behaves sensibly on a 720p capture and a 4K one alike. The badge
+estimates the size as you drag, within 3% for size targets and source-format
+presets; WebM is looser, since VP9 is driven by quality rather than a rate. Targets
+aim safely under — 10 MB lands near 8.9, nearer 6 for WebM — because a limit that
+gets exceeded is a rejected upload.
 
-Only *Same as source* can be a lossless copy — asking for something smaller is,
-by definition, asking not to reproduce the original.
+Only *Same as source* can be a lossless copy. WebM is software VP9 and roughly 5×
+an H.264 export; GIF has no size target, its rate control being a palette. A VP9 or
+AV1 source stays VP9 or AV1 rather than becoming H.264 behind your back.
 
-Size targets aim safely under, since a limit that gets exceeded is a rejected
-upload: a 10 MB target lands around 8.9 MB. Presets and size targets apply to
-WebM as well — they used to be accepted and then quietly ignored, so a WebM
-export came out the same size whatever you asked for. There a target is a
-ceiling more than an aim, since single-pass VP9 undershoots and 10 MB may land
-nearer 6, but under is the direction that matters for a limit.
-
-WebM is software VP9 and genuinely slow (no GPU encodes VP9), roughly 5× the
-time of an H.264 export. GIF has no size target, since its rate control is a
-colour palette rather than a bitrate.
-
-Whatever the format, the encoder is the one that suits the source: a VP9 or AV1
-file stays VP9 or AV1 rather than being turned into H.264 behind your back.
+Track *names* need ffprobe 7+ to be read out of an MP4. On older versions every
+track is still found and selectable, just listed by number; the flatpak carries
+ffmpeg 8.
 
 ## Deleting the original
 
-**Delete original after export** offers to remove the file you cut from, which
-is the point of trimming a 110 MB replay buffer down to the ten seconds worth
-keeping. It never acts on its own:
+**Delete original after export** removes the file you cut from — the point of
+trimming a 110 MB replay buffer to the ten seconds worth keeping. It never acts on
+its own:
 
-- It only ever asks **after a successful export**, and only if the clip it wrote
-  is a real file of non-trivial size. A zero-byte export leaves the original
-  alone and says so.
-- The prompt names the file, its size, and **how much of it you are throwing
-  away** — "your clip kept 14.0s, about 15%; the other 85% is only in this file".
-- **Move to Trash** is the default. Outside a sandbox it goes through `gio`,
-  which picks the right wastebasket for the file's own disk. Inside the Flatpak
-  that routes via the Trash portal, which KDE advertises but does not implement,
-  so the app writes the trash entry itself instead — same result, still
-  restorable from Dolphin.
-- **Delete permanently** skips the Trash and asks a second time, on its own
-  dialog, because nothing can undo it.
-- `Esc` always means keep.
+- It only asks **after a successful export**, and only if the clip it wrote is a
+  real file of non-trivial size.
+- The prompt names the file, its size, and **how much you are throwing away** —
+  "your clip kept 14.0s, about 15%; the other 85% is only in this file".
+- **Move to Trash** is the default and stays restorable from Dolphin. KDE
+  advertises the Trash portal but does not implement it, so inside the Flatpak the
+  app writes the trash entry itself.
+- **Delete permanently** asks again on its own dialog. `Esc` always means keep.
 
-Afterwards the file is closed, dropped from Recent, and the window returns to
-its empty state — it will not sit there showing a file that no longer exists.
+Afterwards the file is closed and dropped from Recent.
 
 ## Folders the Flatpak cannot see
 
-The Flatpak is allowed into **Videos**, **Pictures** and **Downloads**, and
-nowhere else. A file kept anywhere else — a second drive under `/var/mnt`, say —
-is not merely off limits: it is not mounted inside the sandbox at all, so
-`ffprobe` reports it as *"No such file or directory"*, word for word what it
-says about a file that was deleted. That message sent at least one person
-looking for a file that was sitting exactly where they left it.
+The Flatpak reaches **Videos**, **Pictures** and **Downloads** and nowhere else. A
+file on a second drive under `/var/mnt` is not merely off limits — it is not
+mounted in the sandbox at all, so `ffprobe` reports *"No such file or directory"*,
+word for word what it says about a file that was deleted.
 
-So the app checks before repeating it. If the folder itself is invisible and
-this is a Flatpak, the file is almost certainly there and the sandbox is the
-problem, and you get a dialog that says so and offers both ways out:
+So the app checks first, and offers both ways out:
 
-- **Locate the file…** reopens the chooser at that folder. The chooser belongs
-  to the desktop portal and runs outside the sandbox, so it can reach what the
-  app cannot, and picking the file hands it over. Nothing to restart, but it
-  grants that one file — the clip is then written to `~/Videos`, because the
-  portal exposes the source in a directory that holds nothing else.
+- **Locate the file…** reopens the chooser, which is the desktop portal and runs
+  outside the sandbox, so picking the file hands it over. That grants one file, and
+  the clip goes to `~/Videos`.
 - **Copy command** puts the exact line on your clipboard:
 
   ```sh
@@ -236,38 +181,52 @@ problem, and you get a dialog that says so and offers both ways out:
       io.github.raulblideran.ApricotStudio
   ```
 
-  Run it and start the app again. [Flatseal] does the same thing with a
-  checkbox. Either way it is permanent, and exports can then go next to the
-  source as usual.
+  Run it and restart the app; [Flatseal] does the same with a checkbox.
 
-The app cannot grant this itself. Nothing in the portal API allows it, and the
-one thing that would — `--talk-name=org.freedesktop.Flatpak` — lets an app run
-arbitrary commands on the host, which is far too much to ask for a convenience.
-Handing over the right command is as close as this can honestly get.
-
-A file that really is missing, or one `ffprobe` simply refuses, still gets the
-plain message it always did.
+The app cannot grant this itself: the only thing that would,
+`--talk-name=org.freedesktop.Flatpak`, lets an app run arbitrary commands on the
+host. A file that really is missing still gets the plain message.
 
 [Flatseal]: https://flathub.org/apps/com.github.tchx84.Flatseal
 
+## Themes
+
+**Theme** in the header switches the whole look, immediately, and remembers it.
+
+**Default** is the charcoal interface the app has always had, unchanged — it runs
+the same code path it did before themes existed. A test compares a rendered button
+against a plain Qt one.
+
+**Cyberpunk** is a NetWatch terminal: **Rajdhani** (bundled under the OFL), crimson
+`#ff0056` chrome and a teal `#24d3d0` readout over near-black, notched buttons,
+scanlines, and a channel-split glitch under the pointer. It owns its palette, so
+the accent swatch hides while it is on; your Default accent is kept rather than
+overwritten.
+
+Its colours face the same measurements as the accent palette, with one forced
+exception: red already meant "this will delete your original", so under a crimson
+accent the warning moved to **hazard orange** `#ff5c00`, ΔE 49 away. The scanlines
+are drawn light — a dark line on near-black shifts the pixel by one value in 255,
+passing every contrast test while not existing — and stay faint enough to hold the
+worst case at 5.13:1. There is no vignette; it would push the delete colour under
+the floor at exactly the foot of the window where that checkbox sits.
+
 ## Accent colour
 
-The swatch in the top-right opens eleven accents, each shown as a colour rather
-than described. **Apricot** (`#e27125`) is the default; the choice applies
-immediately and is remembered.
+Under Default, the swatch in the top-right opens eleven accents, each shown as a
+colour rather than described. **Apricot** (`#e27125`) is the default.
 
-They span the hue wheel at roughly even lightness, so switching changes the
-colour without changing how heavy the interface looks. Every one clears
-**4.5:1** against the window background — the accent is used for text, not only
-for fills — and the closest pair is ΔE 17 apart, so none of them are hard to
-tell from another.
+They span the hue wheel at roughly even lightness, so switching changes the colour
+without changing how heavy the interface looks. Every one clears **4.5:1** against
+the window background — the accent is used for text, not only fills — and the
+closest pair is ΔE 17 apart.
 
-Two colours deliberately ignore the accent, because they are statements rather
-than decoration: **green** for "this export is a lossless copy" and **red** for
-"this will delete your original". No accent in the palette comes close enough to
-either to be mistaken for it, so picking a green accent cannot make the delete
-checkbox look reassuring. Text drawn on top of the accent is computed from its
-luminance, so a dark colour would stay legible too.
+Two colours ignore the accent, because they are statements rather than decoration:
+**green** for "this export is a lossless copy" and **red** for "this will delete
+your original". Each theme picks its own pair, and no accent in any theme comes
+close enough to be mistaken for either, so picking a green accent cannot make the
+delete checkbox look reassuring. Text on top of the accent is computed from its
+luminance, so a dark colour stays legible.
 
 ## What "inherits the settings" means
 
@@ -284,23 +243,15 @@ luminance, so a dark colour would stay legible too.
 | Bitrate | capped CRF against the source's own bitrate |
 | **Audio** | **stream-copied — bit identical, never re-encoded** |
 
-That GOP-structure row matters more than it looks. Screen recorders encode
-all-P (`IPPPP…`, no B-frames) for low latency, but an encoder left to itself
-adds them — which forces the decoder to buffer and reorder frames, and shows up
-as stuttery playback. Apricot Studio reads the source's reorder depth and matches it.
+The GOP row matters more than it looks. Screen recorders encode all-P (`IPPPP…`)
+for low latency, but an encoder left to itself adds B-frames, forcing the decoder
+to buffer and reorder — which shows up as stuttery playback.
 
-Cuts are frame-exact at both ends. Because that requires re-encoding the video,
-each export costs one generation; measured against a 1440p60 9.5 Mb/s replay the
-result is 37.4 dB PSNR at 1.00× the source bitrate, which is not visible. The
-re-encoded clip decodes slightly *cheaper* than the source it came from.
-
-Audio is copied rather than re-encoded, so it takes no loss at all. It can only
-start on a whole packet, which leaves it within one 20 ms Opus frame of the
-video — measured at 17 ms, inaudible.
-
-Encoding runs at roughly 1.5× real time for 1440p60 on a Ryzen 7 5700X3D, so a
-15-second clip takes about 10 seconds. AV1 sources go to the GPU encoder instead,
-since AV1 in software is far too slow at 4K.
+Cuts are frame-exact at both ends, which means re-encoding the video at a cost of
+one generation: 37.4 dB PSNR at 1.00× the source bitrate on a 1440p60 replay, not
+visible. Audio is copied rather than re-encoded, so takes no loss, and starts
+within 17 ms of the video. Encoding runs at about 1.5× real time for 1440p60 on a
+Ryzen 7 5700X3D; AV1 goes to the GPU encoder, being far too slow in software.
 
 ## Files
 
@@ -311,98 +262,50 @@ since AV1 in software is far too slow at 4K.
 | `export.py` | builds and runs the ffmpeg cut |
 | `sandbox.py` | what the Flatpak can reach, and what to say when it cannot |
 | `timeline.py` | the timeline widget |
-| `theme.py` | accent palette and the stylesheet built from it |
+| `theme.py` | the themes, the accent palette, and the stylesheet built from them |
+| `chrome.py` | notched buttons, scanlines, glitch — what stylesheets cannot express |
+| `fonts/` | Rajdhani, the Cyberpunk theme's typeface, under the OFL |
 | `tests/` | the test suite |
 
 ## Tests
 
 ```sh
-./run-tests.sh           # 384 tests, ~29s (real encodes)
+./run-tests.sh           # 446 tests, ~28s (real encodes)
 ./run-tests.sh --fast    # ~4s, skips anything that invokes ffmpeg
 ./run-tests.sh -v        # one line per test
 ```
 
-Uses `unittest` and `PyQt6.QtTest` — both already on the system, so there is
-nothing to install and the suite runs unchanged inside a flatpak. `pytest` has
-nicer ergonomics but isn't in the Bazzite base image, and adding it would make
-it this project's only dependency.
+Uses `unittest` and `PyQt6.QtTest`, both already on the system, so there is nothing
+to install and the suite runs unchanged inside a flatpak.
 
 | Module | Covers |
 |---|---|
-| `test_units.py` | timecode, output naming, keyframe matching, size arithmetic, track labels |
+| `test_units.py` | timecode, output naming, keyframe matching, size arithmetic, track labels, chamfer geometry, scanline legibility, packaging completeness |
 | `test_commands.py` | the ffmpeg arguments produced for every combination of options |
 | `test_edges.py` | malformed input, hostile filenames, degenerate ranges, unreadable sources |
 | `test_encode.py` | real exports: bit-identity, durations, A/V sync, GOP structure, formats |
-| `test_theme.py` | palette contrast, distinctness, and the derived stylesheet |
+| `test_theme.py` | per-theme palette contrast, distinctness, and the derived stylesheet |
 | `test_sandbox.py` | telling a hidden folder from a missing file, and the command offered for it |
-| `test_gui.py` | timeline geometry, zoom, snapping, painting, focus, accent, delete targeting, the blocked-folder dialog |
+| `test_gui.py` | timeline geometry, zoom, snapping, painting, focus, accent, themes, delete targeting, the blocked-folder dialog |
 
-Fixtures are synthesised with ffmpeg into `/tmp` — the suite never reads your
-video library, and it never writes your settings either: `XDG_CONFIG_HOME` is
-redirected before Qt loads, so a test that resizes a window cannot decide what
-size your copy opens at. The `allp` fixture deliberately mirrors a gpu-screen-recorder
-capture (H.264 all-P, 2 s GOP, Opus in MP4).
+Fixtures are synthesised with ffmpeg into `/tmp`, so the suite never reads your
+video library, and `XDG_CONFIG_HOME` is redirected before Qt loads so it never
+writes your settings. The `allp` fixture mirrors a gpu-screen-recorder capture
+(H.264 all-P, 2 s GOP, Opus in MP4).
 
 **The tests are checked against the bugs they exist for.** Every defect this
-project shipped was silent — the clip played fine, it was just wrong — so each
-fix has a test, and each of those tests has been confirmed to fail when the fix
-is reverted:
-
-| Reverted fix | Result |
-|---|---|
-| keyframe rounding | caught |
-| size-target overshoot | caught |
-| B-frames the source never had | caught |
-| single-seek A/V desync | caught |
-| dropping extra audio tracks | caught |
-| extension read from the whole path | caught |
-| timecode accepting `nan`/`inf`/negative | caught |
-| formatter crashing on non-finite input | caught |
-| negative seek reaching ffmpeg | caught |
-| size-target bitrate left unbounded | caught |
-| output losing its extension | caught |
-| delete prompt following the open file | caught |
-| a hidden folder reported as a missing file | caught |
-| the override command left unquoted | caught |
-| exporting into the portal's one-file directory | caught |
-| a GIF palette built from the rest of the file | caught |
-| WebM ignoring the quality preset and the size target | caught |
-| a size target re-encoding a VP9 source to H.264 | caught |
-| a negative duration on a cut that starts at a keyframe | caught |
-| the delete prompt reading the open file's length | caught |
-| an unencoded `file://` URI reaching the file manager | caught |
-| a half-written clip left behind by a failed export | caught |
-| a cancel deleting a file the export never wrote | caught |
-| a probe with no way to give up | caught |
-| controls left live after loading another file | caught |
-| the window forgetting its size | caught |
-| the playhead running off a zoomed timeline | caught |
-| a filmstrip that grew without limit | caught |
-| the Open button handing Qt's checked flag to the file chooser | caught |
-
-Four of these were originally *missed* by tests that only looked like they
-covered the behaviour — one asserted a value was recorded without checking
-anything read it, the second used `endswith` where `"clip..webm"` would have
-passed, and the third raised a timeout by hand and so passed just as happily
-against a probe that would have waited forever. All of them are why the sweep is
-worth running rather than assumed.
-
-The fourth is worth its own paragraph, because it reached two releases. Clicking
-**Open…** crashed the app: `clicked` carries a checked flag, PyQt hands a slot as
-many arguments as it will take, and `open_file` had an optional parameter for it
-to land in — so the file chooser was asked to open `False`, and an exception
-inside a slot is fatal in PyQt6. Every test around it called `open_file`
-directly with a string, or replaced it with a mock and asserted it had been
-*called*. The method was covered from every side except the one a user presses.
-There is now a test that clicks the button, and one that clicks every button in
-the window; the stand-in they share records what it was handed and the tests
-check it, since a fake looser than the call it replaces is the trap that hid
-this in the first place.
+project shipped was silent — the clip played fine, it was just wrong — so each of
+the **29** fixes was confirmed to fail the suite when reverted, and the theming
+work was checked the same way with 14 mutations. Four of those bugs had been
+*missed* by tests that only looked like they covered the behaviour; one mocked the
+Open handler and asserted it was called, while the button that called it crashed
+the app for two releases. There is now a test that clicks every button in the
+window.
 
 Window tests need a real display and skip cleanly without one, so the suite is
 green headless.
 
 ## Not included
 
-No filters, scaling, colour correction, transitions or multi-clip editing — that
-is what the big editors are for.
+No filters, scaling, colour correction, transitions or multi-clip editing — that is
+what the big editors are for.
